@@ -1,0 +1,25 @@
+.git
+.gitignore
+.DS_Store
+.vscode
+*.log
+
+# Python
+__pycache__/
+*.pyc
+.venv/
+backend/.venv/
+
+# Node/Vite
+frontend/node_modules/
+frontend/dist/
+frontend/.vite/
+
+# Outputs/temporary
+output/
+logs/
+data/
+
+# Env files (compose 通过 env 传递)
+.env
+backend/.env

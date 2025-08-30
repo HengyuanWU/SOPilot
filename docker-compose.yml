@@ -1,0 +1,51 @@
+services:
+  neo4j:
+    image: neo4j:5.21.0
+    container_name: sopilot-neo4j
+    environment:
+      - NEO4J_AUTH=neo4j/test1234
+      - NEO4J_server_config_strict__validation_enabled=false
+    ports:
+      - "7474:7474"
+      - "7687:7687"
+    volumes:
+      - neo4j_data:/data
+      - neo4j_logs:/logs
+
+  backend:
+    build: .
+    container_name: sopilot-backend
+    env_file:
+      - backend/.env
+    environment:
+      - PYTHONPATH=/app/backend/src
+      - APP_OUTPUT_DIR=/app/output
+      - VALIDATOR_PASS_THRESHOLD=7.0
+      - APP_USE_REAL_WORKFLOW=${APP_USE_REAL_WORKFLOW:-true}
+      - APP_DEFAULT_PROVIDER=${APP_DEFAULT_PROVIDER:-}
+      - APP_NEO4J__URI=bolt://neo4j:7687
+      - APP_NEO4J__USER=neo4j
+      - APP_NEO4J__PASSWORD=test1234
+      - APP_NEO4J__DATABASE=neo4j
+    ports:
+      - "8000:8000"
+    depends_on:
+      - neo4j
+    command: ["python", "-m", "uvicorn", "app.asgi:app", "--host", "0.0.0.0", "--port", "8000", "--app-dir", "backend/src"]
+    volumes:
+      - ./output:/app/output
+
+  frontend:
+    image: node:20-alpine
+    working_dir: /app/frontend
+    volumes:
+      - ./frontend:/app/frontend
+    command: sh -c "npm ci --no-audit --no-fund && npm run dev -- --host"
+    ports:
+      - "5173:5173"
+    depends_on:
+      - backend
+
+volumes:
+  neo4j_data:
+  neo4j_logs:
