@@ -1,7 +1,7 @@
 import logging
 from typing import Dict, List, Any, TypedDict
-from app.domain.state.textbook_state import TextbookState
-from app.infrastructure.llm.client import llm_call
+from ..state.textbook_state import TextbookState
+from ...infrastructure.llm.client import llm_call
 
 # 配置日志
 logger = logging.getLogger(__name__)
@@ -42,11 +42,12 @@ class Planner:
         )
 
     def generate_outline(self, topic: str, chapter_count: int = 5, language: str = "中文") -> str:
+        """Generate outline using YAML-based prompt system."""
         try:
-            prompt = self.outline_prompt_template.format(
-                topic=topic, chapter_count=chapter_count, language=language
-            )
-            outline = llm_call(prompt, api_type=self.provider, max_tokens=2000, agent_name="Planner")
+            # Use migration helper for YAML-based call
+            from ...services.migration_service import migration_helper
+            outline = migration_helper.call_planner(topic, chapter_count, language)
+            
             if not outline or outline.strip() == "":
                 raise RuntimeError(f"主题 '{topic}' 大纲生成失败（API空响应）")
             return outline

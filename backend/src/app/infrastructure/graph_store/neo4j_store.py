@@ -14,7 +14,7 @@ import logging
 from typing import Optional, Dict, Any, List
 
 from .neo4j_client import Neo4jClient, create_neo4j_client
-from app.domain.kg.store import KGStore
+from ...domain.kg.store import KGStore
 
 
 logger = logging.getLogger(__name__)
@@ -58,7 +58,7 @@ def create_neo4j_store(config: Optional[Dict[str, Any]] = None) -> Optional[Neo4
         # 当未显式传入或缺少 neo4j 配置时，从 AppSettings 读取
         if not cfg_to_use.get("neo4j"):
             try:
-                from app.core.settings import get_settings
+                from ...core.settings import get_settings
                 s = get_settings()
                 neo = s.neo4j.model_dump(exclude_none=True)
                 cfg_to_use = {"neo4j": neo} if neo else {}

@@ -49,6 +49,10 @@ def create_app() -> FastAPI:
         # SPA 路由回退：非 /api 与 /assets 的路径都交给前端
         @app.get("/{full_path:path}")
         async def _serve_spa(full_path: str):  # pragma: no cover
+            # 不拦截API路径
+            if full_path.startswith("api/"):
+                from fastapi import HTTPException
+                raise HTTPException(status_code=404, detail="Not Found")
             return FileResponse(index_file)
     return app
 

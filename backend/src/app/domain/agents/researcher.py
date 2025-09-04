@@ -1,9 +1,9 @@
 import logging
 import concurrent.futures
 from typing import Dict, List, Any, TypedDict
-from app.domain.state.textbook_state import TextbookState
-from app.infrastructure.llm.client import llm_call
-from app.core.concurrency import default_concurrency_config, high_concurrency_config
+from ..state.textbook_state import TextbookState
+from ...infrastructure.llm.client import llm_call
+from ...core.concurrency import default_concurrency_config, high_concurrency_config
 
 logger = logging.getLogger(__name__)
 
@@ -37,14 +37,16 @@ class Researcher:
         )
 
     def generate_subchapter_research(self, topic: str, subchapter_title: str, subchapter_outline: str, language: str = "中文") -> SubchapterResearch:
+        """Generate subchapter research using YAML-based prompt system."""
         try:
-            prompt = self.subchapter_prompt_template.format(
-                topic=topic, subchapter_title=subchapter_title, subchapter_outline=subchapter_outline or "(无补充大纲)"
-            )
-            research_content = llm_call(prompt, api_type=self.provider, max_tokens=1500, agent_name="Researcher")
-            if not research_content or research_content.strip() == "":
+            # Use migration helper for YAML-based call
+            from ...services.migration_service import migration_helper
+            research_result = migration_helper.call_researcher(topic, subchapter_title, subchapter_outline)
+            
+            if not research_result or not research_result.get("raw_content"):
                 raise RuntimeError(f"子章节 '{subchapter_title}' 研究内容生成失败（API空响应）")
-            return self._parse_subchapter_research(research_content)
+            
+            return research_result
         except Exception as e:
             logger.error(f"生成子章节研究内容时出错: {e}")
             raise

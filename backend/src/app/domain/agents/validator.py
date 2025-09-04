@@ -1,8 +1,8 @@
 import logging
 import re
 from typing import Dict, List, Any, Tuple
-from app.domain.state.textbook_state import TextbookState
-from app.infrastructure.llm.client import llm_call
+from ..state.textbook_state import TextbookState
+from ...infrastructure.llm.client import llm_call
 
 logger = logging.getLogger(__name__)
 
@@ -55,8 +55,37 @@ class Validator:
             subchapter_keywords=keywords_str,
             research_summary=research_summary[:500],
         )
-        validation_report = llm_call(prompt, api_type=self.provider, max_tokens=2000, agent_name="Validator")
-        if not validation_report or validation_report.strip() == "":
+        # Use migration helper for YAML-based call
+        try:
+            from ...services.migration_service import migration_helper
+            validation_result = migration_helper.call_validator(
+                topic=topic,
+                subchapter_title=subchapter_title,
+                subchapter_content=subchapter_content[:3000],
+                subchapter_outline=subchapter_outline[:500],
+                subchapter_keywords=keywords_str,
+                research_summary=research_summary[:500]
+            )
+            validation_report = validation_result.get("raw_validation_content", "")
+            if not validation_report or validation_report.strip() == "":
+                return {
+                    "subchapter_title": subchapter_title,
+                    "score": 5.0,
+                    "is_passed": False,
+                    "report": (
+                        "## 验证报告\n"
+                        "### 总体评分：5/10\n"
+                        "### 主要问题：验证服务不可用（空响应）\n"
+                        "### 改进建议：请稍后重试验证\n"
+                        "### 是否通过：否\n"
+                        "### 重写建议：请等待验证服务恢复后再进行改写"
+                    ),
+                    "rewrite_suggestions": "",
+                    "validation_time": "failed",
+                    "error": "验证报告生成失败: 空响应",
+                }
+        except Exception as e:
+            logger.error(f"Validation failed: {e}")
             return {
                 "subchapter_title": subchapter_title,
                 "score": 5.0,
@@ -64,14 +93,14 @@ class Validator:
                 "report": (
                     "## 验证报告\n"
                     "### 总体评分：5/10\n"
-                    "### 主要问题：验证服务不可用（空响应）\n"
+                    "### 主要问题：验证服务异常\n"
                     "### 改进建议：请稍后重试验证\n"
                     "### 是否通过：否\n"
                     "### 重写建议：请等待验证服务恢复后再进行改写"
                 ),
                 "rewrite_suggestions": "",
                 "validation_time": "failed",
-                "error": "验证报告生成失败: 空响应",
+                "error": f"验证报告生成失败: {str(e)}",
             }
         score, is_passed, rewrite_suggestions = self._extract_score_from_report(
             validation_report, self._resolve_pass_threshold()
@@ -88,7 +117,7 @@ class Validator:
     def _resolve_pass_threshold(self) -> float:
         if self.pass_threshold is not None:
             return self.pass_threshold
-        from app.core.concurrency import default_concurrency_config
+        from ...core.concurrency import default_concurrency_config
 
         validator_cfg = default_concurrency_config.get_agent_config("validator")
         return validator_cfg.get("pass_threshold", 7.0)

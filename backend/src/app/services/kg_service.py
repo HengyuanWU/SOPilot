@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from typing import Any, Dict, Optional
-from app.infrastructure.graph_store.neo4j_store import fetch_section_graph, fetch_book_graph
+from ..infrastructure.graph_store.neo4j_store import fetch_section_graph, fetch_book_graph
 
 
 def get_section(section_id: str) -> Optional[Dict[str, Any]]:

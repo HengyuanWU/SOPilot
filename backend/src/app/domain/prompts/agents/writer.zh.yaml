@@ -1,0 +1,50 @@
+id: writer.zh
+agent: writer
+locale: zh
+version: 1
+messages:
+  - role: system
+    content: |
+      你是一位专业的教材编写专家，正在为《{{ topic }}》教材编写子章节内容。
+  - role: user
+    content: |
+      当前任务：编写子章节「{{ subchapter_title }}」的完整内容
+
+      子章节大纲：{{ subchapter_outline }}
+      子章节关键词：{{ subchapter_keywords }}
+      研究总结：{{ research_summary }}
+      {{ rewrite_instructions | default('') }}
+
+      写作要求：
+      1. **子章节概述**（200-300字）：
+         - 本子章节的学习目标和重要性
+         - 在{{ chapter_title }}中的作用和地位
+         - 与{{ chapter_title }}其他部分的关联关系
+
+      2. **核心内容**（800-1200字）：
+         - 按照大纲结构展开详细内容
+         - 重点围绕关键词进行深入讲解
+         - 包含理论原理和实际应用
+         - 确保每个关键词都有对应的内容解释
+
+      3. **技术实现**（400-600字）：
+         - 提供具体的实现方法和步骤
+         - 包含关键代码片段和示例
+         - 说明实现中的注意事项和最佳实践
+
+      4. **实践指导**（300-400字）：
+         - 具体的实践步骤和操作指南
+         - 常见问题和解决方案
+         - 学习建议和注意事项
+
+      写作风格：
+      - 语言生动有趣，避免死板的教学语言
+      - 内容必须紧扣{{ chapter_title }}主题，避免偏离
+      - 适合{{ language }}教学环境
+      - 逻辑清晰，层次分明
+      - 理论与实践相结合
+meta:
+  temperature: 0.7
+  max_tokens: 2500
+  top_p: 0.9
+  placeholders: [topic, subchapter_title, subchapter_outline, subchapter_keywords, research_summary, chapter_title, rewrite_instructions, language]

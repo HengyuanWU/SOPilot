@@ -38,4 +38,27 @@ class KGThresholds:
             if conf >= theta_show and cnt >= min_evidence_count:
                 filtered.append(e)
         return filtered
+    
+    def apply_thresholds(self, kg_data: Dict[str, Any]) -> Dict[str, Any]:
+        """应用阈值过滤到知识图谱数据"""
+        try:
+            # 过滤节点（暂时保留所有节点）
+            filtered_nodes = kg_data.get("nodes", [])
+            
+            # 过滤边
+            edges = kg_data.get("edges", [])
+            filtered_edges = self.filter_edges_for_storage(edges)
+            
+            # 创建过滤后的KG数据
+            filtered_kg = kg_data.copy()
+            filtered_kg["nodes"] = filtered_nodes
+            filtered_kg["edges"] = filtered_edges
+            
+            logger.info(f"阈值过滤: 节点 {len(filtered_nodes)}, 边 {len(filtered_edges)}/{len(edges)}")
+            
+            return filtered_kg
+            
+        except Exception as e:
+            logger.error(f"应用阈值失败: {e}")
+            return kg_data
 

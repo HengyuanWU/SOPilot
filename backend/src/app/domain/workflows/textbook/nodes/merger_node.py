@@ -3,7 +3,7 @@
 import logging
 from typing import Dict, Any
 
-from app.domain.workflows.textbook.merger import Merger
+from ..merger import Merger
 
 logger = logging.getLogger(__name__)
 

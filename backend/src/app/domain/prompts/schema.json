@@ -1,0 +1,60 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "Prompt Schema",
+  "type": "object",
+  "properties": {
+    "id": {
+      "type": "string",
+      "description": "Prompt ID"
+    },
+    "agent": {
+      "type": "string",
+      "description": "Agent name"
+    },
+    "locale": {
+      "type": "string",
+      "description": "Language locale"
+    },
+    "version": {
+      "type": "string",
+      "description": "Version"
+    },
+    "messages": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "role": {
+            "type": "string",
+            "enum": ["system", "user", "assistant"]
+          },
+          "content": {
+            "type": "string"
+          }
+        },
+        "required": ["role", "content"]
+      }
+    },
+    "meta": {
+      "type": "object",
+      "properties": {
+        "temperature": {
+          "type": "number",
+          "minimum": 0,
+          "maximum": 2
+        },
+        "max_tokens": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "placeholders": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        }
+      }
+    }
+  },
+  "required": ["id", "messages"]
+}

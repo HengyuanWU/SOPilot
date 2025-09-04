@@ -6,6 +6,7 @@ import uuid
 from typing import Any, AsyncGenerator, Dict, Optional
 
 from ..core.settings import get_settings
+from ..infrastructure.storage.output_writer import append_run_log, write_run_output
 
 
 # 内存运行表（阶段5最小实现；后续可替换为持久化）
@@ -18,8 +19,10 @@ def _now_ms() -> int:
 
 
 def create_run(payload: Dict[str, Any]) -> Dict[str, Any]:
-    """创建运行并异步启动（当前为模拟执行，后续对接 domain）。"""
+    """创建运行并异步启动（支持多工作流）。"""
     run_id = str(uuid.uuid4())
+    workflow_id = payload.get("workflow_id", "textbook")  # 默认为textbook保持兼容性
+    
     RUNS[run_id] = {
         "id": run_id,
         "status": "pending",
@@ -28,6 +31,8 @@ def create_run(payload: Dict[str, Any]) -> Dict[str, Any]:
         "topic": payload.get("topic"),
         "language": payload.get("language"),
         "chapter_count": payload.get("chapter_count"),
+        "workflow_id": workflow_id,
+        "workflow_params": payload.get("workflow_params", {}),
         "error": None,
         "result": None,
     }
@@ -47,33 +52,81 @@ def get_run(run_id: str) -> Optional[Dict[str, Any]]:
 
 
 async def _run_simulated(run_id: str) -> None:
-    """阶段5占位：模拟执行并推送日志。"""
+    """模拟执行不同工作流并推送日志。"""
     run = RUNS.get(run_id)
     if not run:
         return
     settings = get_settings()
+    workflow_id = run.get("workflow_id", "textbook")
 
     async def log(msg: str) -> None:
+        timestamp = _now_ms()
+        # 发送到SSE流
         await RUN_LOGS[run_id].put(msg)
+        # 同时写入文件
+        try:
+            append_run_log(run_id, {
+                "timestamp": timestamp,
+                "message": msg,
+                "level": "info" if "[info]" in msg else "error" if "[error]" in msg else "debug"
+            })
+        except Exception as e:
+            # 日志写入失败不应该影响主流程
+            pass
 
     try:
         run["status"] = "running"
         run["updated_at"] = _now_ms()
-        await log(f"[info] run {run_id} started | provider={settings.default_provider or 'unset'} | mode=simulated")
+        await log(f"[info] run {run_id} started | workflow={workflow_id} | provider={settings.default_provider or 'unset'} | mode=simulated")
 
         await asyncio.sleep(0.3)
-        await log("[info] initializing workflow...")
+        await log(f"[info] initializing {workflow_id} workflow...")
 
         await asyncio.sleep(0.5)
-        await log("[info] executing planner → researcher → writer → qa → kg → merger (simulated)")
+        
+        # 根据工作流类型模拟不同的执行步骤
+        if workflow_id == "textbook":
+            await log("[info] executing planner → researcher → writer → qa → kg → merger (simulated)")
+        elif workflow_id == "quiz_maker":
+            await log("[info] executing question_generator → formatter (simulated)")
+        else:
+            await log(f"[info] executing {workflow_id} workflow steps (simulated)")
 
         await asyncio.sleep(0.4)
         await log("[info] finalizing...")
 
-        run["result"] = {"message": "simulated result"}
+        # 根据工作流类型生成不同的结果
+        if workflow_id == "textbook":
+            run["result"] = {
+                "message": "教材生成完成",
+                "workflow": workflow_id,
+                "chapters_generated": run.get("chapter_count", 8),
+                "topic": run.get("topic", "示例主题")
+            }
+        elif workflow_id == "quiz_maker":
+            run["result"] = {
+                "message": "问答生成完成", 
+                "workflow": workflow_id,
+                "questions_generated": run.get("workflow_params", {}).get("question_count", 10),
+                "topic": run.get("topic", "示例主题")
+            }
+        else:
+            run["result"] = {
+                "message": f"{workflow_id} 工作流执行完成",
+                "workflow": workflow_id,
+                "topic": run.get("topic", "示例主题")
+            }
+            
         run["status"] = "succeeded"
         run["updated_at"] = _now_ms()
-        await log("[done] succeeded")
+        await log(f"[done] {workflow_id} workflow succeeded")
+        
+        # 写入产物到磁盘
+        try:
+            write_run_output(run)
+            await log("[info] artifacts written to disk")
+        except Exception as e:
+            await log(f"[warning] failed to write artifacts: {e}")
     except Exception as exc:  # noqa: BLE001
         run["status"] = "failed"
         run["error"] = str(exc)
@@ -108,7 +161,19 @@ async def _run_real_workflow(run_id: str) -> None:
     settings = get_settings()
 
     async def log(msg: str) -> None:
+        timestamp = _now_ms()
+        # 发送到SSE流
         await RUN_LOGS[run_id].put(msg)
+        # 同时写入文件
+        try:
+            append_run_log(run_id, {
+                "timestamp": timestamp,
+                "message": msg,
+                "level": "info" if "[info]" in msg else "error" if "[error]" in msg else "debug"
+            })
+        except Exception as e:
+            # 日志写入失败不应该影响主流程
+            pass
 
     try:
         run["status"] = "running"
@@ -120,28 +185,46 @@ async def _run_real_workflow(run_id: str) -> None:
         queue = RUN_LOGS[run_id]
 
         def _execute_workflow() -> Dict[str, Any]:
-            # 使用新域路径的工作流实现
-            from app.domain.workflows.textbook import TextbookWorkflow
-            from app.domain.state.textbook_state import TextbookState
+            # 动态获取工作流实例
+            from ..domain.workflows.registry import get_workflow
             from .config_service import build_legacy_config_from_settings
-            from app.core.progress_manager import progress_manager
+            from ..core.progress_manager import progress_manager
 
-            # 用 AppSettings 构造与旧实现兼容的配置结构
-            config = build_legacy_config_from_settings(settings)
-            workflow = TextbookWorkflow(config)
+            workflow_id = run.get("workflow_id", "textbook")
+            workflow_params = run.get("workflow_params", {})
+            
+            try:
+                # 使用工作流注册系统获取工作流实例
+                workflow = get_workflow(workflow_id)
+            except ValueError as e:
+                raise RuntimeError(f"Unknown workflow: {workflow_id}") from e
 
+            # 准备初始状态
             topic = run.get("topic") or "未命名"
             language = run.get("language") or "中文"
-            chapter_count = int(run.get("chapter_count") or 3)
-
-            initial_state: TextbookState = {
+            
+            # 构建工作流特定的初始状态
+            initial_state = {
                 "topic": topic,
                 "language": language,
-                "num_chapters": chapter_count,
-                "chapter_count": chapter_count,
                 "thread_id": str(uuid.uuid4()),
-                "config": config,
+                **workflow_params
             }
+            
+            # 对于textbook工作流，添加特定参数
+            if workflow_id == "textbook":
+                from ..domain.state.textbook_state import TextbookState
+                # 用 AppSettings 构造与旧实现兼容的配置结构
+                config = build_legacy_config_from_settings(settings)
+                
+                chapter_count = int(run.get("chapter_count") or 8)
+                initial_state.update({
+                    "num_chapters": chapter_count,
+                    "chapter_count": chapter_count,
+                    "config": config,
+                })
+            
+            # 其他工作流可以根据需要添加特定参数处理
             # 注册进度事件回调，将事件转发到 SSE
             def on_event(evt: str, data: Dict[str, Any]) -> None:
                 try:
@@ -176,15 +259,25 @@ async def _run_real_workflow(run_id: str) -> None:
 
         full_final_content = result.get("final_content")
         run["result"] = {
+            "final_content_full": full_final_content,  # 保存完整内容用于写入文件
             "final_content": True if isinstance(full_final_content, str) and full_final_content else None,
             "section_id": first_section_id,
             "section_ids": section_ids or None,
             "book_id": book_id,  # B1方案新增
             "processing_stats": result.get("processing_stats"),
+            "workflow_id": run.get("workflow_id"),
+            "workflow_params": run.get("workflow_params"),
         }
         run["status"] = "succeeded"
         run["updated_at"] = _now_ms()
         await log("[done] succeeded")
+        
+        # 写入产物到磁盘
+        try:
+            write_run_output(run)
+            await log("[info] artifacts written to disk")
+        except Exception as e:
+            await log(f"[warning] failed to write artifacts: {e}")
     except Exception as exc:  # noqa: BLE001
         run["status"] = "failed"
         run["error"] = str(exc)

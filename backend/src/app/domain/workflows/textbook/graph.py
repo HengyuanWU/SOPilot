@@ -10,17 +10,112 @@ from typing import Dict, Any
 from langgraph.graph import StateGraph
 from langgraph.checkpoint.memory import MemorySaver
 
-from app.domain.state.textbook_state import TextbookState
-from app.domain.workflows.textbook.nodes.planner_node import planner_node
-from app.domain.workflows.textbook.nodes.researcher_node import researcher_node
-from app.domain.workflows.textbook.nodes.writer_node import writer_node
-from app.domain.workflows.textbook.nodes.qa_node import qa_node
-from app.domain.workflows.textbook.nodes.kg_node import kg_node
-from app.domain.workflows.textbook.nodes.book_graph_node import book_graph_node
-from app.domain.workflows.textbook.nodes.merger_node import merger_node
-from app.core.progress_manager import progress_manager
+from ...state.textbook_state import TextbookState
+from .nodes.planner_node import planner_node
+from .nodes.researcher_node import researcher_node
+from .nodes.writer_node import writer_node
+from .nodes.qa_node import qa_node
+from .nodes.kg_node import kg_node
+from .nodes.book_graph_node import book_graph_node
+from .nodes.merger_node import merger_node
+from ....core.progress_manager import progress_manager
 
 logger = logging.getLogger(__name__)
+
+
+def get_metadata():
+    """
+    获取教材生成工作流元数据
+    
+    Returns:
+        工作流元数据字典
+    """
+    return {
+        "id": "textbook",
+        "name": "教材生成",
+        "description": "基于主题生成完整的教材内容，包括章节规划、内容研究、写作、QA生成和知识图谱构建",
+        "version": "1.0.0",
+        "tags": ["education", "textbook", "ai-generated"],
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "topic": {
+                    "type": "string",
+                    "title": "教材主题",
+                    "description": "请输入要生成教材的主题，例如：'机器学习基础'、'Python编程入门'等",
+                    "minLength": 2,
+                    "maxLength": 200
+                },
+                "target_audience": {
+                    "type": "string", 
+                    "title": "目标受众",
+                    "description": "教材的目标读者群体",
+                    "enum": ["初学者", "中级", "高级", "专业人士"],
+                    "default": "初学者"
+                },
+                "language": {
+                    "type": "string",
+                    "title": "语言",
+                    "description": "教材生成语言",
+                    "enum": ["zh", "en"],
+                    "default": "zh"
+                },
+                "chapter_count": {
+                    "type": "integer",
+                    "title": "章节数量",
+                    "description": "期望生成的章节数量",
+                    "minimum": 3,
+                    "maximum": 15,
+                    "default": 8
+                },
+                "enable_qa": {
+                    "type": "boolean",
+                    "title": "生成问答",
+                    "description": "是否为每个章节生成配套的问答题目",
+                    "default": True
+                },
+                "enable_kg": {
+                    "type": "boolean", 
+                    "title": "构建知识图谱",
+                    "description": "是否构建教材的知识图谱",
+                    "default": True
+                }
+            },
+            "required": ["topic"],
+            "additionalProperties": False
+        },
+        "ui_schema": {
+            "topic": {
+                "ui:widget": "textarea",
+                "ui:placeholder": "例如：机器学习基础、Python编程入门..."
+            },
+            "target_audience": {
+                "ui:widget": "select"
+            },
+            "language": {
+                "ui:widget": "radio"
+            },
+            "chapter_count": {
+                "ui:widget": "updown"
+            },
+            "enable_qa": {
+                "ui:widget": "checkbox"
+            },
+            "enable_kg": {
+                "ui:widget": "checkbox"
+            }
+        }
+    }
+
+
+def get_workflow():
+    """
+    获取教材生成工作流实例
+    
+    Returns:
+        TextbookWorkflow实例
+    """
+    return TextbookWorkflow()
 
 
 class TextbookWorkflow:
