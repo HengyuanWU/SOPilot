@@ -38,4 +38,39 @@ export const getKnowledgeGraph = async (bookId, sectionId) => {
         return await getKgSection(sectionId);
     }
     throw new Error('Neither bookId nor sectionId provided');
-}; 
+};
+
+// Workflow API functions
+export const getWorkflows = async () => {
+    const { data } = await api.get('/api/v1/workflows');
+    return data;
+};
+
+export const getWorkflowDetail = async (id) => {
+    const { data } = await api.get(`/api/v1/workflows/${id}`);
+    return data;
+};
+
+export const getWorkflowSchema = async (id) => {
+    const { data } = await api.get(`/api/v1/workflows/${id}/schema`);
+    return data;
+};
+
+// Artifacts API functions
+export const getRunArtifacts = async (runId) => {
+    const { data } = await api.get(`/api/v1/runs/${runId}/artifacts`);
+    return data;
+};
+
+export const downloadRunFile = (runId, fileName) => {
+    const base = api.defaults.baseURL?.replace(/\/$/, '') || '';
+    return `${base}/api/v1/runs/${runId}/download?file=${encodeURIComponent(fileName)}`;
+};
+
+export const downloadRunArchive = (runId) => {
+    const base = api.defaults.baseURL?.replace(/\/$/, '') || '';
+    return `${base}/api/v1/runs/${runId}/archive.zip`;
+};
+
+// 导出axios实例供PromptStudio使用
+export { api }; 

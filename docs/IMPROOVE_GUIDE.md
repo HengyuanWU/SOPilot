@@ -467,165 +467,526 @@ backend/src/app/domain/workflows/
 
 ---
 
-## 3. RAG 集成（知识库/检索管线/节点注入）
+## 3. RAG 集成（知识库 / 检索管线 / 节点注入）
+
+> 决策落地：**混合检索** 采用「**双通道并行检索 + 合并重排**」；向量库选 **Qdrant**，图谱库沿用 **Neo4j**。  
+> 流程：**Qdrant 向量检索**（语义召回） + **Neo4j KG 检索**（结构关系） → **Merger/Rerank** → Prompt 构造 → LLM。
 
 ### 3.1 放置目录（代码 & 数据）
 
-```
+```bash
 # 代码
 backend/src/app/infrastructure/rag/
-├── chunker.py           # 文档分块（Markdown/HTML/PDF/纯文本）
-├── embedder.py          # 向量化（默认：BGE small；后续可换）
-├── index_faiss.py       # 索引器（FAISS MVP）
-├── retriever.py         # top-k 检索 + 重排（可接 bge-reranker）
-└── pipeline.py          # 统一对外：ingest/index/retrieve
+├── chunker.py                 # 文档分块（Markdown/HTML/PDF/TXT）
+├── embedder.py                # 向量化（默认：BAAI/bge-small-zh-v1.5）
+├── vectorstores/
+│   └── qdrant_store.py        # Qdrant 读写封装（集合管理/批量upsert）
+├── kgstores/
+│   └── neo4j_queries.py       # Neo4j 检索（实体/路径/子图）与写入辅助
+├── retrievers/
+│   ├── retriever_vector.py    # 向量检索 Top-k（Qdrant）
+│   └── retriever_kg.py        # KG 检索（Cypher），可限制跳数/关系类型/时间
+├── rerankers/
+│   └── bge_reranker.py        # 交叉编码器复排（可关）
+├── merger.py                  # 双通道结果合并+打分归一+去重
+├── prompt_builder.py          # 将证据片段+子图转为可读上下文
+└── pipeline.py                # 统一对外：ingest / index / retrieve / test
 
-# 数据
+# 数据（持久层）
 knowledge_base/
-├── raw/                 # 原始上传文档（保持原文件）
-├── chunks/              # 解析/切片后的中间件（JSONL）
-└── index/               # 向量索引（FAISS 文件）
-```
+├── raw/                       # 原始上传文档（原样存档）
+├── chunks/                    # 分块后 JSONL（含meta/embedding_id等）
+└── snapshots/                 # 可选：索引/集合快照与统计（不存向量本体）
 
-* Docker 卷：将 `knowledge_base/` 挂载到后端容器 `/app/knowledge_base`。
+# 容器卷（由 docker-compose 管理）
+# - qdrant_data:/qdrant/storage               # Qdrant 索引/向量
+# - neo4j_data:/data                          # Neo4j 图数据
+# - <backend_volume>:/app/knowledge_base      # 文本及中间件
+````
 
-### 3.2 API 合同（知识库管理）
-
-* `GET  /api/v1/rag/docs`：列出已上传文档（文件名/大小/更新时间/索引状态）
-* `POST /api/v1/rag/docs`：上传文档（多文件）
-* `DELETE /api/v1/rag/docs/{name}`：删除文档
-* `POST /api/v1/rag/reindex`：重建索引（可增量）
-* `POST /api/v1/rag/test_retrieval`：给定 query，返回 top-k 命中文档片段（调试用）
-
-### 3.3 在工作流中的使用点
-
-* **researcher 节点**：将用户主题/子章节标题作为 query，拼接 `retriever.top_k` 结果进上下文（带来源标注）
-* **writer 节点**：可选：将命中片段作为“引用材料”输入到 Prompt（要求引用格式化输出）
-* **validator 节点**（可选）：对关键断言进行反向检索核验，生成“证据充分度”分。
-
-### 3.4 前端（Knowledge Base）
-
-```
-frontend/src/views/KnowledgeBase.vue
-```
-
-* 支持：文件上传/删除、索引状态展示、样例检索预览（query → 片段列表）
-* 运行创建页：新增复选框“启用 RAG”与参数（top\_k、是否重排）
-
-### 3.5 参数与默认值（MVP）
-
-* `chunk_size = 800`，`chunk_overlap = 120`
-* `top_k = 4`，`score_threshold = 0.2`
-* 嵌入：`BAAI/bge-small-zh-v1.5`（或同级开源）
-
+> 与原设计差异：移除 `index_faiss.py` 与 `index/FAISS` 文件夹；向量索引改由 **Qdrant** 统一管理（持久化在其容器卷）。
 
 ---
 
-````markdown
-## 3. RAG 集成（知识库/检索管线/节点注入）
+### 3.2 环境与 Docker 编排
 
-### 3.1 数据存储结构
-**知识库目录结构：**
-```plaintext
-knowledge_base/
-├── raw/                 # 原始上传文档（保持原文件）
-├── chunks/              # 解析/切片后的中间件（JSONL）
-└── index/               # 向量索引（FAISS 文件）
-````
+**后端 .env（新增 Qdrant 配置）**
 
+```dotenv
+# Qdrant
+APP_QDRANT__URL=http://qdrant:6333
+APP_QDRANT__API_KEY=                # 本地无需；云端自配
+APP_QDRANT__COLLECTION=kb_chunks
+APP_QDRANT__DISTANCE=cosine         # 余弦/点积/欧氏，默认 cosine
+APP_QDRANT__HNSW_M=16               # HNSW 参数（可调）
+APP_QDRANT__HNSW_EF_CONSTRUCTION=128
+APP_QDRANT__OPTIMIZER_MEM_LIMIT_MB=2048
 
-### 3.2 Docker 卷挂载
+# Neo4j（已存在）
+APP_NEO4J__URI=bolt://neo4j:7687
+APP_NEO4J__USER=neo4j
+APP_NEO4J__PASSWORD=your_password
+APP_NEO4J__DATABASE=neo4j
+```
 
-* **Docker 卷挂载**是将宿主机的目录（如 `knowledge_base/`）映射到 Docker 容器中。这样做的好处是容器内部可以方便地访问宿主机上的数据，数据不会丢失。
-* 宿主机的 `knowledge_base/` 可以挂载到容器的 `/app/knowledge_base` 路径中，确保容器启动时可以读取和写入宿主机的数据。
-
-**Docker Compose 配置示例：**
+**docker-compose（新增 Qdrant 服务，建议单独 overlay）**
 
 ```yaml
+# docker-compose.vectordb.yml
+services:
+  qdrant:
+    image: qdrant/qdrant:latest
+    container_name: sopilot-qdrant
+    restart: unless-stopped
+    ports:
+      - "6333:6333"
+      - "6334:6334"
+    volumes:
+      - qdrant_data:/qdrant/storage
+
 volumes:
-  - ./knowledge_base:/app/knowledge_base
+  qdrant_data:
 ```
 
-这样设置后，宿主机的 `./knowledge_base` 目录将挂载到容器中的 `/app/knowledge_base`，容器内的服务可以直接访问和处理该目录下的数据。
+运行方式（叠加）：
 
-实际开发中，将宿主机的项目根目录下的`knowledge_base`挂载，勿挂载其他目录导致找不到目录
+```bash
+docker compose -f docker-compose.yml -f docker-compose.vectordb.yml up -d --build
+```
 
+> 体积提示：新增 Qdrant 镜像 \~150–350 MB（压缩拉取体积），可接受。Milvus 体积更大（多容器，2.5–3.5 GB），本项目首选 **Qdrant 轻量**方案。
 
-### 3.3 嵌入与重排模型调用
+---
 
-#### 3.3.1 嵌入模型与重排模型调用方式：
+### 3.3 API 合同（知识库管理 & 调试）
 
-我们可以将现有的 `llm_call` 客户端进行扩展，使其支持调用 **嵌入模型** 和 **重排模型**。
+* `GET    /api/v1/rag/docs`：列出文档（文件名/大小/更新时间/索引状态）
+* `POST   /api/v1/rag/docs`：上传文档（多文件）
+* `DELETE /api/v1/rag/docs/{name}`：删除文档（同时删除向量与元数据）
+* `POST   /api/v1/rag/reindex`：重建索引（全量/增量；可选 `{"clean":true}`）
+* `POST   /api/v1/rag/test_vector`：`{query, top_k}` → 返回向量通道命中
+* `POST   /api/v1/rag/test_kg`：`{query, hop, rel_types[]}` → 返回 KG 子图/证据
+* `POST   /api/v1/rag/test_dual`：`{query}` → 返回合并/复排后的最终证据包
 
-**方案：**
+**标准响应（test\_dual）**
 
-* **嵌入模型**：使用 `llm_call` 发送文本数据，将其转化为向量，并返回结果。
-* **重排模型**：将查询嵌入和文档嵌入传递给重排模型，按相似度对文档进行重排。
+```json
+{
+  "query": "什么是注意力机制？",
+  "vector_hits": [
+    {"doc":"...", "chunk":"...", "score":0.81, "meta":{"section":"...", "page":1}}
+  ],
+  "kg_hits": [
+    {"path":"Concept(注意力)->DEFINES->Method(Scaled Dot-Product)", "score":0.66}
+  ],
+  "merged": [
+    {"type":"chunk","id":"...","score":0.73},
+    {"type":"kg_path","id":"...","score":0.62}
+  ],
+  "prompt_preview": "…（截断）…"
+}
+```
 
-**示例代码：**
+---
+
+### 3.4 数据建模（RAG 视角的最小约定）
+
+* `(:Doc)-[:HAS_CHUNK]->(:Chunk {id, text, tokens, lang, ...})`
+* `(:Entity {name, aliases, ...})`
+* `(:Chunk)-[:MENTIONS]->(:Entity)` **（连接检索与图谱的关键边）**
+* 向量仅存于 Qdrant；Chunk 节点保存 `embedding_id`/`vector_id` 以便反查。
+
+---
+
+### 3.5 索引与入库（ingest → index）
+
+1. **文本分块** `chunker.py`
+
+   * 默认参数：`chunk_size=800, chunk_overlap=120`（中文/中英混排友好）
+   * 输出：`chunks/*.jsonl`，每行包含 `chunk_id/doc_id/text/meta`
+
+2. **向量化** `embedder.py`
+
+   * 默认 `BAAI/bge-small-zh-v1.5`（中/英都可用）
+   * 支持批处理+GPU；可替换为自选模型（接口统一）
+
+3. **写入 Qdrant** `vectorstores/qdrant_store.py`
+
+   * 集合 schema：`vector: float[dim] + payload(meta)`
+   * 元数据字段（最少）：`doc_id, chunk_id, section, lang, created_at`
+
+4. **关联 KG** `kgstores/neo4j_queries.py`
+
+   * 可选：抽取实体后建立 `(:Chunk)-[:MENTIONS]->(:Entity)`，为 KG 检索补证据。
+
+---
+
+### 3.6 在工作流中的注入点（LangGraph）
+
+* **researcher 节点**
+
+  * 将 `{topic/subchapter}` → `query`
+  * 并行调用：
+
+    * `retriever_vector.search(query, top_k=k1, filters=...)`
+    * `retriever_kg.subgraph(query, hop=h, rel_types=..., limit=k2)`
+  * 输出 `research_content` 附带 `evidence.vector / evidence.kg`
+
+* **writer 节点**
+
+  * 通过 `prompt_builder` 注入“引用材料”（标明来源：文档/页码/实体路径）
+
+* **validator 节点（可选）**
+
+  * 反向检索核验关键断言（期望能命中至少 N 条可靠证据），生成“证据充分度”。
+
+---
+
+### 3.7 打分、合并与复排（核心）
+
+**召回规模（默认）**
+
+* 向量通道：`k1 = 12`
+* KG 通道：`k2 = 8`
+* 合并后复排取：`k_final = 4`
+
+**归一化与融合**
+
+```text
+vector_score' = minmax(vector_score)
+kg_score'     = path_score(path_len, edge_conf, support_count)  # 见下
+final_score   = α * vector_score' + β * kg_score'
+默认 α=0.7, β=0.3
+```
+
+**KG 路径打分（建议）**
+
+* `path_len`: 越短越好（建议 `1/len`）
+* `edge_conf`: 关系字段 `confidence` 的均值/最小值
+* `support_count`: 该路径涉及的 `MENTIONS` 支持次数
+  **示例**：`kg_score = 0.6*(1/len) + 0.3*avg_conf + 0.1*log(1+support)`
+
+**复排（可关）**
+
+* `rerankers/bge_reranker.py` 使用 `bge-reranker-base` 交叉编码器
+* 复排对象：合并后的候选（文本片段与 KG 解释串）
+* 产出：最终 Top-`k_final` 证据列表（携带来源与可视化 info）
+
+---
+
+### 3.8 前端（Knowledge Base & RAG 调试面板）
+
+* **KnowledgeBase.vue**：文件上传/删除、索引状态、样例检索预览
+* **新增 RAG 设置项**（运行创建页）：
+
+  * 复选：「启用 RAG」
+  * 数值：`top_k`、`k1/k2/k_final`、`α/β`、`hop`、`rel_types[]`
+  * 开关：「启用复排」
+* **调试页**（可复用现有日志页侧栏）：输入 `query` → 展示
+
+  * **向量命中**、**KG 命中**、**合并与复排**、**Prompt 预览**
+
+---
+
+### 3.9 参数与默认值（MVP）
+
+* 分块：`chunk_size=800`，`chunk_overlap=120`
+* 向量检索：`k1=12`，距离 `cosine`
+* KG 检索：`k2=8`，默认 `hop=2`，关系类型白名单可为空
+* 合并权重：`α=0.7`，`β=0.3`
+* 复排：默认 **开启**，模型 `bge-reranker-base`；`k_final=4`
+* 嵌入：`BAAI/bge-small-zh-v1.5`
+
+---
+
+### 3.10 关键代码片段（示例伪代码）
 
 ```python
-class MultiModelClient:
-    def __init__(self, provider: str = "siliconflow"):
-        self.provider = provider
-        self.llm_service = LLMService(provider)
+# pipeline.py
+def dual_retrieve(query: str, top_k_final=4):
+    vec_hits = retriever_vector.search(query, top_k=12)        # Qdrant
+    kg_hits  = retriever_kg.subgraph(query, hop=2, limit=8)    # Neo4j
 
-    def call_agent(self, agent_name: str, prompt: str) -> str:
-        """调用特定的 Agent 进行推理"""
-        return self.llm_service.llm_call(prompt, agent_name=agent_name)
-    
-    def generate_embeddings(self, texts: List[str]) -> List[float]:
-        """调用嵌入模型生成文本向量"""
-        prompt = f"请将以下文本转化为向量：\n" + "\n".join(texts)
-        return self.llm_service.llm_call(prompt, api_type="embedding", agent_name="embedding-agent")
+    merged   = merger.combine(vec_hits, kg_hits, alpha=0.7, beta=0.3)
+    reranked = bge_reranker.rerank(query, merged)              # 可开关
 
-    def rerank_results(self, query_embeddings: List[float], doc_embeddings: List[float], top_k: int = 4, score_threshold: float = 0.2) -> List[Dict]:
-        """调用重排模型重新排序检索结果"""
-        prompt = f"根据以下嵌入向量，对文档进行重排：query: {query_embeddings}, documents: {doc_embeddings}, top_k: {top_k}, threshold: {score_threshold}"
-        return self.llm_service.llm_call(prompt, api_type="reranking", agent_name="rerank-agent")
+    prompt   = prompt_builder.build(query, reranked[:top_k_final])
+    return {"vector_hits": vec_hits, "kg_hits": kg_hits,
+            "merged": reranked[:top_k_final], "prompt": prompt}
 ```
 
-### 3.4 数据存储与向量索引
+---
 
-1. **raw**：保存原始上传的文档文件（例如 PDF、Word 或 TXT）。
-2. **chunks**：将原始文档切片成多个部分，存储为 JSONL 格式，便于检索与向量化。
-3. **index**：使用 FAISS 等库存储文档的向量索引，进行高效的相似度检索。
+### 3.11 权限与过滤（可选）
 
-**向量索引的存储**：
+* Payload 过滤：为每个 Chunk 增加 `tenant_id / project_id / visibility`
+* 查询时传入过滤器，Qdrant 支持 `must/should/must_not` 过滤组合；KG 查询加 `WHERE n.scope = $scope`
 
-* 使用 FAISS 或其他类似的库进行向量化处理，然后将其存储在 `index/` 目录下。
-* 文档的嵌入向量会存储在此目录中，供检索系统使用。
+---
 
-**FAISS 索引示例**：
+### 3.12 监控与评估（建议）
+
+* 指标：**召回/复排命中率**、**首位命中率@1**、**证据充分度均值**、**平均响应时延**
+* 采样集：维护 `eval/queries.jsonl`，包含标准答案/引用，定期离线评测
+* 日志：为每次检索记录 `query/hash`、参数、候选与最终证据、用时
+
+---
+
+## 4. 真·Neo4j 教材 → 知识图谱（工程化分层解耦版）
+
+> 全面采用 **工程化分层设计**：抽取（Builder）→ 规范化（Normalizer）→ 幂等存储（Store）→ 合并（Merger）→ 查询与渲染（Service）。
+
+### 4.1 数据模型
+
+**节点标签**  
+`Concept`, `Chapter`, `Subchapter`, `Method`, `Example`, `Dataset`, `Equation`, `Doc`, `Chunk`
+
+**关系类型**  
+- **结构**：`PART_OF`（Subchapter→Chapter）、`HAS_SECTION`（Chapter→Subchapter）、`HAS_CHUNK`（Doc→Chunk）  
+- **语义**：`DEFINES`, `EXPLAINS`, `REQUIRES`, `SIMILAR_TO`, `CONTRASTS_WITH`, `IMPLEMENTS`  
+- **检索桥接**：`MENTIONS`（Chunk→Entity，用于证据回链）
+
+**节点属性**  
+`id, name, type, desc, aliases[], scope, created_at, updated_at`
+
+**关系属性**  
+`rid, type, src(section_id), scope(book_id), confidence, weight, created_at`
+
+
+### 4.2 分层流水线（可插拔组件）
+
+```text
+kg_pipeline/
+├── builder.py     # 节点：LLM 抽取或规则抽取 → JSON Schema
+├── normalizer.py  # 节点：normalize 统一化处理（别名/词形/同义/停用词）
+├── idempotent.py  # 节点：幂等ID生成与查重 (node_id, rid)
+├── store.py       # 节点：写入Neo4j，保证唯一约束
+├── merger.py      # 节点：整书级合并，跨节归并/去重
+└── service.py     # 节点：查询API服务层，供前端调用
+````
+
+**特点**
+
+* **分层解耦**：每个模块单一职责，可替换/扩展
+* **面向对象**：每层实现 `BaseComponent` 接口，支持依赖注入
+* **可扩展**：可替换 Builder（LLM/规则）、可替换 Normalizer（规则库/Embedding）
+* **可插拔**：任何环节可关闭/跳过（Feature Flag）
+
+
+### 4.3 幂等与一致性
+
+* 节点：`MERGE (n {id})`，由 `slug(canonical_name)` 或短哈希生成
+* 关系：`rid = sha256(source|target|type|scope|content_hash)[:16]`
+* 写入策略：
+
+  * **节点**：唯一约束保证幂等
+  * **关系**：按 `rid` 去重，按 `scope` 替换更新
+* 内容更新：基于 `content_hash` 实现增量更新
+
+**Cypher 约束/索引**
+
+```cypher
+CREATE CONSTRAINT concept_id IF NOT EXISTS FOR (n:Concept) REQUIRE n.id IS UNIQUE;
+CREATE CONSTRAINT chunk_id   IF NOT EXISTS FOR (n:Chunk)   REQUIRE n.id IS UNIQUE;
+CREATE INDEX     node_scope  IF NOT EXISTS FOR (n) ON (n.scope);
+CREATE INDEX     rel_scope   IF NOT EXISTS FOR ()-[r]-() ON (r.scope);
+CREATE INDEX     rel_rid     IF NOT EXISTS FOR ()-[r]-() ON (r.rid);
+```
+
+### 4.4 查询与服务层（统一 Book Scope）
+
+* 所有前端查询均基于 **Book Scope**（不再支持 Section 回退）
+* API 服务层提供：
+
+  * **节点详情接口**：返回基本信息 + 来源 Section + 证据 Chunk IDs
+  * **关系详情接口**：返回 `confidence`, `weight`, 解释路径（<=2跳）
+  * **子图查询接口**：邻居展开 / 解释路径 / 证据回链
+
+
+### 4.5 KG × RAG 联动查询示例
+
+**A. 实体邻接子图（带证据）**
+
+```cypher
+MATCH (e:Concept {name:$name})
+OPTIONAL MATCH (c:Chunk)-[:MENTIONS]->(e)
+WITH e, collect(c.id)[..10] AS chunk_ids
+MATCH p = (e)-[r*1..2]-(nbr)
+RETURN e, nodes(p) AS nodes, relationships(p) AS rels, chunk_ids
+LIMIT 50;
+```
+
+**B. 由 Chunk 反查相关实体**
+
+```cypher
+MATCH (c:Chunk {id:$chunk_id})-[:MENTIONS]->(e:Concept)
+OPTIONAL MATCH p = (e)-[r*1..2]-(nbr)
+RETURN e, nodes(p) AS nodes, relationships(p) AS rels
+LIMIT 30;
+```
+
+
+### 4.6 前端渲染与解释
+
+* **证据列表**：显示 Chunk 摘要（Doc/页码/段落）
+* **解释路径**：实体间最短路径（<=2跳）
+* **关系属性可视化**：`confidence`/`weight` 图形化展示
+
+### 4.7 工程化特征
+
+* **统一视图**：仅保留 Book Scope，不再做 Section 兼容
+* **分层解耦**：抽取 → 规范化 → 幂等 → 存储 → 合并 → 查询
+* **可插拔**：替换 Builder、替换 Normalizer、替换 Merger 策略无需修改其他层
+* **一致性**：幂等 MERGE + `rid` 去重，保证全局唯一
+* **可扩展**：未来可在 Service 层挂接向量库/混合检索，无需改动下游
+
+---
+
+## 5. 教材产物稳定落盘（可下载/可追溯）
+
+### 5.1 目录与命名
+
+* 环境变量：`APP_OUTPUT_DIR`（默认 `./output`）
+* 结构：
+
+```
+output/
+  └── <run_id>/
+      ├── book.md                 # 合并后的 Markdown
+      ├── book.json               # 结构化元数据（章节树、统计）
+      ├── qa.json                 # QA 对
+      ├── kg_section_ids.json     # 小节 ID 列表
+      ├── book_id.txt             # 整书图谱 ID
+      └── logs.ndjson             # 运行日志（SSE 同步写入）
+```
+
+### 5.2 API 支持
+
+* `GET /api/v1/runs/{run_id}/artifacts`：列出落盘文件
+* `GET /api/v1/runs/{run_id}/download?file=book.md`：单文件下载
+* `GET /api/v1/runs/{run_id}/archive.zip`：打包下载
+
+### 5.3 前端
+
+* RunDetail 页面新增 **Artifacts/下载** 标签页：文件列表与一键下载
+
+---
+
+## 6. 迁移与实施顺序（两周 MVP）
+
+**Phase 1（D1–D3）**：Prompt Hub（后端 + 前端只读）
+
+1. 新增 `domain/prompts/` 与 YAML 模板；`registry.py` + API
+2. Agent 读取路径切换到 PromptRegistry（保留内置默认）
+3. 前端新增 /prompts 列表+详情（先只读）
+
+**Phase 2（D4–D7）**：多工作流 + 落盘
+
+1. `workflows/registry.py` + `GET /workflows` + `POST /runs` 支持 `workflow_id`
+2. 首页工作流选择器；动态表单渲染
+3. `APP_OUTPUT_DIR` 标准化落盘 + 下载接口 + 前端“Artifacts”
+
+**Phase 3（D8–D12）**：RAG MVP + KG 升级
+
+1. `infrastructure/rag/` + 知识库 API + KB 页面
+2. `researcher` 注入检索片段；writer 可选引用
+3. KG Builder：JSON Schema 校验 + 规范化/幂等/索引
+
+**Phase 4（D13–D14）**：收尾与回归
+
+1. 端到端冒烟 + 大样本测试
+2. 文档/脚本完善、回滚预案
+
+---
+
+## 7. 配置与环境变量（新增）
+
+```bash
+# Prompt
+APP_PROMPT_DIR=backend/src/app/domain/prompts/agents
+
+# RAG
+APP_RAG__BASE_DIR=knowledge_base
+APP_RAG__EMBED_MODEL=BAAI/bge-small-zh-v1.5
+APP_RAG__TOP_K=4
+APP_RAG__USE_RERANKER=false
+
+# Output
+APP_OUTPUT_DIR=./output
+```
+
+---
+
+## 8. 开发任务清单（可勾选）
+
+*
+
+---
+
+## 9. 讨论留白（可根据需要二选一/后续再议）
+
+* **Prompt 存储**：YAML（Git 版本化） vs SQLite（版本表 + 审计）；MVP 先 YAML，再演进到 DB
+* **RAG 向量库**：FAISS（轻量离线） vs pgvector/Chroma（在线可共享）；MVP 先 FAISS
+* **重排器**：是否接入 bge-reranker（GPU/CPU 性能影响）
+* **鉴权与审计**：Prompt 编辑权限、版本回滚审计（Phase 3+）
+* **跨章节合并**：概念同义归并策略与人工确认 UI（Phase 3+）
+
+---
+
+## 10. 附：最小代码骨架
+
+\`\`
 
 ```python
-import faiss
-import numpy as np
+from importlib import import_module
+from pathlib import Path
 
-# 创建一个 FAISS 索引
-index = faiss.IndexFlatL2(embedding_dim)  # embedding_dim是向量的维度
+_CACHE = {}
 
-# 将嵌入向量添加到 FAISS 索引中
-index.add(np.array(embeddings, dtype=np.float32))
+def list_workflows():
+    base = Path(__file__).parent
+    items = []
+    for p in base.iterdir():
+        if p.is_dir() and (p / 'graph.py').exists() and p.name != '__pycache__':
+            mod = import_module(f'app.domain.workflows.{p.name}.graph')
+            meta = getattr(mod, 'get_metadata', lambda: {'id': p.name, 'name': p.name, 'description': ''})()
+            items.append(meta)
+    return items
 
-# 检索与查询向量最相似的 top_k 文档
-top_k = 4
-distances, indices = index.search(np.array(query_vector, dtype=np.float32), top_k)
+def get_workflow(workflow_id: str):
+    if workflow_id in _CACHE:
+        return _CACHE[workflow_id]
+    mod = import_module(f'app.domain.workflows.{workflow_id}.graph')
+    wf = getattr(mod, 'get_workflow')()
+    _CACHE[workflow_id] = wf
+    return wf
 ```
 
-### 3.5 前端展示与知识库
+\`\`（简化）
 
-前端展示当前知识库已有文档，并允许用户上传、删除文档，同时展示文档的检索结果。
+```python
+from pathlib import Path
+import yaml, time
+from typing import Dict
 
-**前端页面**：
+class PromptRegistry:
+    def __init__(self, base_dir: str):
+        self.base = Path(base_dir)
+        self.cache: Dict[str, tuple[float, dict]] = {}
 
-* **上传文档**：允许用户上传 PDF 或文本文件，后端会解析并切片文档，将其转化为向量并索引。
-* **检索文档**：用户输入查询，系统会根据查询的文本向量，从 FAISS 索引中检索最相关的文档。
+    def _load(self, key: str) -> dict:
+        path = self.base / f'{key}.yaml'
+        mtime = path.stat().st_mtime
+        cached = self.cache.get(key)
+        if not cached or cached[0] < mtime:
+            data = yaml.safe_load(path.read_text(encoding='utf-8'))
+            self.cache[key] = (mtime, data)
+        return self.cache[key][1]
 
-**前端与后端交互**：
+    def get(self, agent: str, lang: str = 'zh') -> dict:
+        return self._load(f'{agent}.{lang}')
+```
 
-* 用户上传文档 → 调用后端接口进行文档解析与向量化
-* 用户查询 → 调用后端的检索接口，获取相关文档及其得分。
+（其余骨架略，按上文接口与目录落地即可。）
 
-
-
+---

@@ -1,0 +1,64 @@
+# Prompt Bindings Configuration
+# Maps Agent/Workflow/Locale to specific YAML files and model configurations
+bindings:
+  - target_type: agent
+    target_id: planner
+    locale: zh
+    prompt_file: agents/planner.zh.yaml
+    model_ref: siliconflow:Qwen/Qwen3-Coder-30B-A3B-Instruct
+    params:
+      temperature: 0.7
+      max_tokens: 2000
+
+  - target_type: agent
+    target_id: researcher
+    locale: zh
+    prompt_file: agents/researcher.subchapter.zh.yaml
+    model_ref: siliconflow:Qwen/Qwen3-Coder-30B-A3B-Instruct
+    params:
+      temperature: 0.7
+      max_tokens: 1500
+
+  - target_type: agent
+    target_id: writer
+    locale: zh
+    prompt_file: agents/writer.zh.yaml
+    model_ref: siliconflow:Qwen/Qwen3-Coder-30B-A3B-Instruct
+    params:
+      temperature: 0.7
+      max_tokens: 2500
+
+  - target_type: agent
+    target_id: validator
+    locale: zh
+    prompt_file: agents/validator.zh.yaml
+    model_ref: siliconflow:Qwen/Qwen3-Coder-30B-A3B-Instruct
+    params:
+      temperature: 0.3
+      max_tokens: 1500
+
+  - target_type: agent
+    target_id: qa_generator
+    locale: zh
+    prompt_file: agents/qa_generator.zh.yaml
+    model_ref: siliconflow:Qwen/Qwen3-Coder-30B-A3B-Instruct
+    params:
+      temperature: 0.7
+      max_tokens: 2000
+
+  - target_type: agent
+    target_id: kg_builder
+    locale: zh
+    prompt_file: agents/kg_builder.zh.yaml
+    model_ref: siliconflow:Qwen/Qwen3-Coder-30B-A3B-Instruct
+    params:
+      temperature: 0.6
+      max_tokens: 2000
+
+  # Future workflow-level prompts
+  # - target_type: workflow
+  #   target_id: textbook
+  #   locale: zh
+  #   prompt_file: workflows/textbook.zh.yaml
+  #   model_ref: openai:gpt-4o-mini
+  #   params: {}

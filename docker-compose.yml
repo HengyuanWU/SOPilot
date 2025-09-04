@@ -11,6 +11,10 @@ services:
     volumes:
       - neo4j_data:/data
       - neo4j_logs:/logs
+    restart: unless-stopped
+    dns:
+      - 8.8.8.8
+      - 1.1.1.1
 
   backend:
     build: .
@@ -27,24 +31,67 @@ services:
       - APP_NEO4J__USER=neo4j
       - APP_NEO4J__PASSWORD=test1234
       - APP_NEO4J__DATABASE=neo4j
+      # —— 使用国内 PyPI 镜像，减少构建/启动时的网络波动 ——
+      - PIP_INDEX_URL=https://pypi.tuna.tsinghua.edu.cn/simple
+      - PIP_TRUSTED_HOST=pypi.tuna.tsinghua.edu.cn
+      # —— 显式禁用可能遗留的代理变量（采用镜像方案） ——
+      - HTTP_PROXY=
+      - HTTPS_PROXY=
+      - http_proxy=
+      - https_proxy=
+      - NO_PROXY=
+      - no_proxy=
     ports:
       - "8000:8000"
     depends_on:
       - neo4j
-    command: ["python", "-m", "uvicorn", "app.asgi:app", "--host", "0.0.0.0", "--port", "8000", "--app-dir", "backend/src"]
+    command: >
+      sh -c "
+      pip install -r backend/requirements.txt &&
+      python -m uvicorn app.asgi:app --host 0.0.0.0 --port 8000 --app-dir backend/src --reload
+      "
     volumes:
+      - .:/app
       - ./output:/app/output
+    restart: unless-stopped
+    dns:
+      - 8.8.8.8
+      - 1.1.1.1
 
   frontend:
-    image: node:20-alpine
+    image: node:20-bookworm-slim
+    container_name: sopilot-frontend
     working_dir: /app/frontend
+    environment:
+      # —— 显式禁用代理，强制使用镜像源 ——
+      - HTTP_PROXY=
+      - HTTPS_PROXY=
+      - http_proxy=
+      - https_proxy=
+      - NO_PROXY=
+      - no_proxy=
+      # —— npm 容错设置（也可放到项目根 .npmrc） ——
+      - NPM_CONFIG_FETCH_RETRIES=5
+      - NPM_CONFIG_FETCH_TIMEOUT=120000
+      - NPM_CONFIG_FETCH_RETRY_MAXTIMEOUT=300000
+      - NPM_CONFIG_STRICT_SSL=true
     volumes:
       - ./frontend:/app/frontend
-    command: sh -c "npm ci --no-audit --no-fund && npm run dev -- --host"
+    # 先切换 registry 到 npmmirror，再执行安装与启动
+    command: >
+      sh -c "
+      npm config set registry https://registry.npmmirror.com &&
+      npm ci --no-audit --no-fund &&
+      npm run dev -- --host
+      "
     ports:
       - "5173:5173"
     depends_on:
       - backend
+    restart: unless-stopped
+    dns:
+      - 8.8.8.8
+      - 1.1.1.1
 
 volumes:
   neo4j_data:

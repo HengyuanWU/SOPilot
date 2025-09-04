@@ -65,7 +65,7 @@ class AppSettings(BaseSettings):
 
     # ENV 优先（允许使用 backend/.env 本地文件）
     model_config = SettingsConfigDict(
-        env_file="backend/.env",
+        env_file=".env",
         env_file_encoding="utf-8",
         env_prefix="APP_",
         env_nested_delimiter="__",

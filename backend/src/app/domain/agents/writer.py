@@ -1,7 +1,7 @@
 import logging
 from typing import Dict, List, Any
-from app.domain.state.textbook_state import TextbookState
-from app.infrastructure.llm.client import llm_call
+from ..state.textbook_state import TextbookState
+from ...infrastructure.llm.client import llm_call
 
 logger = logging.getLogger(__name__)
 
@@ -74,7 +74,18 @@ class Writer:
                 language=language,
                 rewrite_instructions=rewrite_instructions,
             )
-            content = llm_call(prompt, api_type=self.provider, max_tokens=2500, agent_name="Writer")
+            # Use migration helper for YAML-based call
+            from ...services.migration_service import migration_helper
+            content = migration_helper.call_writer(
+                topic=topic,
+                subchapter_title=subchapter_title,
+                subchapter_outline=subchapter_outline,
+                subchapter_keywords=keywords_str,
+                research_summary=research_summary,
+                chapter_title=chapter_title,
+                language=language,
+                rewrite_instructions=rewrite_instructions
+            )
             if not content or content.strip() == "":
                 raise RuntimeError(f"子章节 '{subchapter_title}' 内容生成失败（API空响应）")
             return content

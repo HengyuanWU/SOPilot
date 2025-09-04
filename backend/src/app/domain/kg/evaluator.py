@@ -112,4 +112,59 @@ class KGEvaluator:
         except Exception:
             logger.error("评估知识覆盖度失败", exc_info=True)
             return {"coverage_score": 0.0, "subchapter_coverage": 0.0, "keyword_coverage": 0.0, "connectivity_score": 0.0, "relation_richness": 0.0}
+    
+    def evaluate_kg(self, kg_data: Dict[str, Any], input_data: Dict[str, Any] = None) -> Dict[str, Any]:
+        """评估知识图谱质量"""
+        try:
+            # 提取输入数据
+            chapters = input_data.get("chapters", []) if input_data else []
+            keywords = input_data.get("keywords", []) if input_data else []
+            
+            # 综合评估
+            structure_analysis = self.analyze_graph_structure(kg_data)
+            relationship_analysis = self.extract_node_relationships(kg_data)
+            coverage_analysis = self.assess_knowledge_coverage(kg_data, chapters, keywords)
+            
+            # 计算总体质量分数
+            quality_score = (
+                0.3 * structure_analysis.get("connectivity_score", 0.0) +
+                0.3 * relationship_analysis.get("relation_richness", 0.0) +
+                0.4 * coverage_analysis.get("coverage_score", 0.0)
+            )
+            
+            # 生成评估总结
+            nodes_count = len(kg_data.get("nodes", []))
+            edges_count = len(kg_data.get("edges", []))
+            
+            summary = f"""
+知识图谱评估结果:
+- 节点数量: {nodes_count}
+- 关系数量: {edges_count}
+- 连通性得分: {structure_analysis.get('connectivity_score', 0.0):.2f}
+- 关系丰富度: {relationship_analysis.get('relation_richness', 0.0):.2f}
+- 知识覆盖度: {coverage_analysis.get('coverage_score', 0.0):.2f}
+- 总体质量分数: {quality_score:.2f}
+            """.strip()
+            
+            return {
+                "kg_structure": structure_analysis,
+                "node_relationships": relationship_analysis,
+                "knowledge_coverage": coverage_analysis,
+                "kg_summary": summary,
+                "quality_score": quality_score,
+                "total_nodes": nodes_count,
+                "total_edges": edges_count
+            }
+            
+        except Exception as e:
+            self.logger.error(f"KG评估失败: {e}")
+            return {
+                "kg_structure": {"connectivity_score": 0.0, "components": 0, "max_component_size": 0},
+                "node_relationships": {"relationship_types": {}, "relation_richness": 0.0},
+                "knowledge_coverage": {"coverage_score": 0.0},
+                "kg_summary": "评估失败",
+                "quality_score": 0.0,
+                "total_nodes": 0,
+                "total_edges": 0
+            }
 

@@ -600,7 +600,7 @@ sequenceDiagram
 #### 3.5.3 Cypher 查询示例
 
 **节点创建/更新：**
-```cypher
+  ```cypher
 MERGE (n:ConceptNode {id: $id})
 SET n += $properties
 SET n.updated_at = datetime()

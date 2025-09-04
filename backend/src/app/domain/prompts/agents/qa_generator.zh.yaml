@@ -1,0 +1,46 @@
+id: qa_generator.zh
+agent: qa_generator
+locale: zh
+version: 1
+messages:
+  - role: system
+    content: |
+      你是一位专业的面试官，正在为《{{ topic }}》教材的子章节「{{ subchapter_title }}」生成面试问答。
+  - role: user
+    content: |
+      子章节内容：
+      {{ subchapter_content }}
+
+      子章节关键词：{{ subchapter_keywords }}
+      研究总结：{{ research_summary }}
+
+      请为该子章节生成5-8个高质量的面试问答，包括：
+      1. 基础概念问答（2-3个）：测试对核心概念的理解
+      2. 技术实现问答（2-3个）：测试实际应用能力
+      3. 深度思考问答（1-2个）：测试分析和解决问题的能力
+
+      每个问答要求：
+      - 问题清晰明确，有针对性
+      - 答案详细准确，包含关键要点
+      - 难度适中，符合学习进度
+      - 与子章节内容紧密相关
+
+      输出格式：
+      ### Q1: [问题]
+      **A:** [详细答案]
+      **难度:** [初级/中级/高级]
+      **类型:** [概念/技术/应用]
+      **关键词:** [相关概念标签]
+
+      ### Q2: [问题]
+      **A:** [详细答案]
+      **难度:** [初级/中级/高级]
+      **类型:** [概念/技术/应用]
+      **关键词:** [相关概念标签]
+
+      请确保问答质量高，内容准确，适合{{ language }}教学环境。
+meta:
+  temperature: 0.7
+  max_tokens: 2000
+  top_p: 0.9
+  placeholders: [topic, subchapter_title, subchapter_content, subchapter_keywords, research_summary, language]

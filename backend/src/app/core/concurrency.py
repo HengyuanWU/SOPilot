@@ -19,31 +19,31 @@ def _build_base_config() -> Dict:
     return {
         "writer": {
             "max_workers": _int_env("WRITER_MAX_WORKERS", 50),
-            "timeout": _int_env("WRITER_TIMEOUT", 300),
+            "timeout": _int_env("WRITER_TIMEOUT", 120),
             "chunk_size": _int_env("WRITER_CHUNK_SIZE", 10),
             "retry_count": _int_env("WRITER_RETRY_COUNT", 3),
         },
         "qa_generator": {
             "max_workers": _int_env("QA_MAX_WORKERS", 50),
-            "timeout": _int_env("QA_TIMEOUT", 300),
+            "timeout": _int_env("QA_TIMEOUT", 120),
             "chunk_size": _int_env("QA_CHUNK_SIZE", 10),
             "retry_count": _int_env("QA_RETRY_COUNT", 3),
         },
         "kg_builder": {
             "max_workers": _int_env("KG_MAX_WORKERS", 50),
-            "timeout": _int_env("KG_TIMEOUT", 300),
+            "timeout": _int_env("KG_TIMEOUT", 120),
             "chunk_size": _int_env("KG_CHUNK_SIZE", 10),
             "retry_count": _int_env("KG_RETRY_COUNT", 3),
         },
         "researcher": {
             "max_workers": _int_env("RESEARCHER_MAX_WORKERS", 50),
-            "timeout": _int_env("RESEARCHER_TIMEOUT", 300),
+            "timeout": _int_env("RESEARCHER_TIMEOUT", 120),
             "chunk_size": _int_env("RESEARCHER_CHUNK_SIZE", 10),
             "retry_count": _int_env("RESEARCHER_RETRY_COUNT", 3),
         },
         "validator": {
             "max_workers": _int_env("VALIDATOR_MAX_WORKERS", 50),
-            "timeout": _int_env("VALIDATOR_TIMEOUT", 300),
+            "timeout": _int_env("VALIDATOR_TIMEOUT", 120),
             "chunk_size": _int_env("VALIDATOR_CHUNK_SIZE", 10),
             "retry_count": _int_env("VALIDATOR_RETRY_COUNT", 3),
             "pass_threshold": float(os.getenv("VALIDATOR_PASS_THRESHOLD", "7.0")),

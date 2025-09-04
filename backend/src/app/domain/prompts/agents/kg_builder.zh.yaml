@@ -1,0 +1,44 @@
+id: kg_builder.zh
+agent: kg_builder
+locale: zh
+version: 1
+messages:
+  - role: system
+    content: |
+      你是一位专业的知识图谱专家，正在为《{{ topic }}》教材构建知识图谱。
+  - role: user
+    content: |
+      教材内容：
+      {{ content_text }}
+
+      关键词：{{ keywords }}
+
+      请务必根据教材内容以及关键词，提取出一个2-3层的知识图谱，包含：
+      1. 核心概念节点
+      2. 概念间的关系
+      3. 层次结构
+
+      输出格式：
+      ## 知识图谱
+      ### 节点
+      - 节点1: [概念描述]
+      - 节点2: [概念描述]
+      ...
+
+      ### 关系
+      - 节点1 -> 节点2: [关系类型]
+      - 节点2 -> 节点3: [关系类型]
+      ...
+
+      ### 层次结构
+      - 第一层: [核心概念]
+        - 第二层: [子概念]
+          - 第三层: [具体概念]
+      ...
+
+      请确保知识图谱结构清晰，关系准确，适合{{ language }}教学。
+meta:
+  temperature: 0.6
+  max_tokens: 2000
+  top_p: 0.9
+  placeholders: [topic, content_text, keywords, language]

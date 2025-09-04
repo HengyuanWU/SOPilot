@@ -13,7 +13,7 @@ from .types import (
 from .middleware import MiddlewareChain, create_default_middleware_chain
 from .providers.openai_client import OpenAICompatibleClient, SiliconFlowClient, DeepSeekCompatibleClient
 from .balancer import KeyBalancer, BalancerConfig
-from app.core.settings import get_settings
+from ...core.settings import get_settings
 
 logger = logging.getLogger(__name__)
 
