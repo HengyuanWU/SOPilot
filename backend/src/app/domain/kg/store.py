@@ -91,7 +91,7 @@ class Neo4jKGStore(BaseKGStore):
         
         for query in constraints_and_indexes:
             try:
-                self.neo4j_client.execute_query(query)
+                self.neo4j_client.execute_cypher(query)
             except Exception as e:
                 # 约束可能已存在，这是正常的
                 self.logger.debug(f"Constraint/Index query result: {e}")
@@ -166,8 +166,8 @@ class Neo4jKGStore(BaseKGStore):
             "updated_at": node.updated_at.isoformat() if node.updated_at else ""
         }
         
-        result = self.neo4j_client.execute_query(query, params)
-        record = result.records[0] if result.records else None
+        result = self.neo4j_client.execute_cypher(query, params)
+        record = result[0] if result else None
         return {"created": record["created"] if record else False}
     
     def _store_edge(self, edge: KGEdge) -> Dict[str, Any]:
@@ -201,8 +201,8 @@ class Neo4jKGStore(BaseKGStore):
             "updated_at": edge.created_at.isoformat() if edge.created_at else ""  # 使用created_at作为updated_at的初始值
         }
         
-        result = self.neo4j_client.execute_query(query, params)
-        record = result.records[0] if result.records else None
+        result = self.neo4j_client.execute_cypher(query, params)
+        record = result[0] if result else None
         return {"created": record["created"] if record else False}
     
     def get_stats(self) -> Dict[str, int]:
@@ -254,6 +254,73 @@ class Neo4jKGStore(BaseKGStore):
         except Exception as e:
             self.logger.error(f"按scope删除失败: {e}")
         return 0
+
+    def delete_edges_by_src(self, section_id: str) -> int:
+        """按src删除边（向后兼容方法）"""
+        if not self.neo4j_client or not section_id:
+            return 0
+        
+        try:
+            # 删除指定src的关系
+            query = "MATCH ()-[r]-() WHERE r.src = $section_id DELETE r RETURN count(r) as deleted_edges"
+            result = self.neo4j_client.execute_cypher(query, {"section_id": section_id})
+            deleted_edges = result[0]["deleted_edges"] if result else 0
+            
+            self.logger.info(f"按src删除: {deleted_edges} edges")
+            return deleted_edges
+            
+        except Exception as e:
+            self.logger.error(f"按src删除失败: {e}")
+        return 0
+
+    def merge_node(self, node: Dict[str, Any]) -> bool:
+        """合并节点到Neo4j"""
+        if not self.neo4j_client or not node:
+            return False
+        
+        try:
+            query = """
+            MERGE (n {id: $id})
+            SET n += $properties
+            RETURN n.id as node_id
+            """
+            params = {
+                "id": node.get("id"),
+                "properties": node
+            }
+            result = self.neo4j_client.execute_cypher(query, params)
+            return bool(result)
+            
+        except Exception as e:
+            self.logger.error(f"节点合并失败: {e}")
+            return False
+
+    def merge_edge(self, edge: Dict[str, Any]) -> bool:
+        """合并边到Neo4j"""
+        if not self.neo4j_client or not edge:
+            return False
+        
+        try:
+            # 使用rid作为关系的唯一标识
+            query = """
+            MATCH (source {id: $source_id})
+            MATCH (target {id: $target_id})
+            MERGE (source)-[r {rid: $rid}]->(target)
+            SET r += $properties
+            RETURN r.rid as edge_rid
+            """
+            params = {
+                "source_id": edge.get("source_id"),
+                "target_id": edge.get("target_id"),
+                "rid": edge.get("rid"),
+                "properties": edge
+            }
+            result = self.neo4j_client.execute_cypher(query, params)
+            return bool(result)
+            
+        except Exception as e:
+            self.logger.error(f"边合并失败: {e}")
+            return False
 
 
 class MemoryKGStore(BaseKGStore):

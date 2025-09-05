@@ -56,13 +56,14 @@ class KGBuilder:
             包含节点、边等信息的知识图谱字典
         """
         try:
-            # 如果传入多个子章节，需要分别处理
-            all_nodes = []
-            all_edges = []
+            logger.info(f"开始使用工程化流水线构建知识图谱: 主题={topic}, 章节数={len(content)}")
+            
+            # 新的工程化流水线：只收集存储统计，不再处理具体节点/边数据
+            total_nodes_processed = 0
+            total_edges_processed = 0
             all_section_ids = []
             
             for subchapter, subchapter_content in content.items():
-                # 如果没有明确的subchapter_title，使用内容的key
                 current_subchapter_title = subchapter_title or subchapter
                 
                 # 创建流水线输入
@@ -80,114 +81,63 @@ class KGBuilder:
                 # 运行新的工程化流水线
                 pipeline_output = self.pipeline.run_one_subchapter_new(pipeline_input)
                 
-                # 检查pipeline_output是否正确
-                if not hasattr(pipeline_output, 'kg_part'):
-                    logger.error(f"Pipeline返回无效结果: {type(pipeline_output)}")
-                    logger.error(f"Pipeline结果内容: {pipeline_output}")
-                    # 创建空的结果继续处理
+                # 检查pipeline_output
+                if not hasattr(pipeline_output, 'store_stats') or not pipeline_output.store_stats:
+                    logger.error(f"Pipeline未返回存储统计信息: {type(pipeline_output)}")
                     continue
                 
-                # 收集结果
-                section_nodes = pipeline_output.kg_part.nodes if hasattr(pipeline_output.kg_part, 'nodes') else []
-                section_edges = pipeline_output.kg_part.edges if hasattr(pipeline_output.kg_part, 'edges') else []
-                
-                # 转换为兼容格式
-                compatible_nodes = self._convert_nodes_to_legacy_format(section_nodes)
-                compatible_edges = self._convert_edges_to_legacy_format(section_edges)
-                
-                all_nodes.extend(compatible_nodes)
-                all_edges.extend(compatible_edges)
-                all_section_ids.append(pipeline_output.section_id)
-                
-                logger.info(f"子章节 {current_subchapter_title} 处理完成: {len(compatible_nodes)} 节点, {len(compatible_edges)} 边")
+                # 收集存储统计信息
+                store_stats = pipeline_output.store_stats
+                if store_stats.get("success"):
+                    nodes_count = store_stats.get("nodes_created", 0) + store_stats.get("nodes_updated", 0)
+                    edges_count = store_stats.get("edges_created", 0) + store_stats.get("edges_updated", 0)
+                    total_nodes_processed += nodes_count
+                    total_edges_processed += edges_count
+                    all_section_ids.append(pipeline_output.section_id)
+                    
+                    logger.info(f"子章节 {current_subchapter_title} 处理完成: {nodes_count} 节点, {edges_count} 边")
+                else:
+                    logger.warning(f"子章节 {current_subchapter_title} 存储失败: {store_stats.get('error', '未知错误')}")
             
-            # 如果有多个章节，进行合并
-            if len(content) > 1:
-                book_id = generate_book_id(topic, language)
+            # 生成book_id并进行书籍级别合并 
+            # 使用固定的run_id以确保同一主题的book_id一致
+            book_id = generate_book_id(topic, f"{topic}_{language}")
+            
+            if len(content) > 1 and all_section_ids:
                 logger.info(f"执行书籍级别合并: {book_id}")
                 
-                # 准备合并数据 - 需要转换为正确的格式
-                section_results = []
-                for section_id in all_section_ids:
-                    # 这里应该传入实际的KG数据，但由于我们已经转换了，暂时跳过合并
-                    pass
-                
+                # 使用新的合并器进行整书级合并
+                section_kgs = [(section_id, {"nodes": [], "edges": []}) for section_id in all_section_ids]
                 book_context = {
                     "book_id": book_id,
                     "topic": topic,
                     "language": language
                 }
                 
-                # 暂时跳过实际的合并，直接记录book_id
-                merged_result = {"book_id": book_id, "success": True}
-                
-                # 更新统计信息
-                logger.info(f"合并完成: {merged_result.get('merged_nodes', 0)} 节点, {merged_result.get('merged_edges', 0)} 边")
-            
-            # 生成book_id
-            book_id = generate_book_id(topic, language)
+                try:
+                    merged_result = self.pipeline.merge_book_kg(section_kgs, book_context)
+                    if merged_result.get("success"):
+                        logger.info(f"书籍合并完成: book_id={book_id}")
+                    else:
+                        logger.warning(f"书籍合并失败: {merged_result.get('error', '未知错误')}")
+                except Exception as e:
+                    logger.error(f"书籍合并异常: {e}")
             
             return {
-                "nodes": all_nodes,
-                "edges": all_edges,
+                "nodes": [],  # 新流水线不返回具体数据，依赖Neo4j存储
+                "edges": [],  # 新流水线不返回具体数据，依赖Neo4j存储
                 "hierarchy": f"主题: {topic} | 章节: {chapter_title or '未知'} | 语言: {language}",
-                "total_nodes": len(all_nodes),
-                "total_edges": len(all_edges),
+                "total_nodes": total_nodes_processed,
+                "total_edges": total_edges_processed,
                 "section_ids": all_section_ids,
                 "book_id": book_id,
-                "raw_content": f"使用工程化流水线处理 {len(content)} 个子章节"
+                "raw_content": f"工程化流水线处理 {len(content)} 个子章节，存储 {total_nodes_processed} 节点，{total_edges_processed} 边"
             }
             
         except Exception as e:
             logger.error(f"构建知识图谱时出错: {e}")
             raise
     
-    def _convert_nodes_to_legacy_format(self, nodes: List) -> List[Dict[str, Any]]:
-        """将新格式的节点转换为兼容的旧格式"""
-        legacy_nodes = []
-        
-        for node in nodes:
-            legacy_node = {
-                "id": node.id,
-                "type": node.type,
-                "name": node.name,
-                "description": node.desc,
-                "canonical_key": node.name.lower().replace(" ", "_"),
-                "aliases": node.aliases or [],
-                "chapter": getattr(node, 'chapter', "未知章节"),
-                "subchapter": getattr(node, 'subchapter', "未知子章节"),
-                "score": 1.0,
-                "source": "kg_pipeline",
-                "created_at": node.created_at.isoformat() if node.created_at else None,
-                "updated_at": node.updated_at.isoformat() if node.updated_at else None,
-            }
-            legacy_nodes.append(legacy_node)
-            
-        return legacy_nodes
-    
-    def _convert_edges_to_legacy_format(self, edges: List) -> List[Dict[str, Any]]:
-        """将新格式的边转换为兼容的旧格式"""
-        legacy_edges = []
-        
-        for edge in edges:
-            legacy_edge = {
-                "id": edge.rid,
-                "type": edge.type,
-                "source_id": edge.source,
-                "target_id": edge.target,
-                "source_name": getattr(edge, 'source_name', edge.source),
-                "target_name": getattr(edge, 'target_name', edge.target),
-                "weight": edge.weight,
-                "confidence": edge.confidence,
-                "evidence": edge.desc or f"从文本中抽取的关系",
-                "chapter": getattr(edge, 'chapter', "未知章节"),
-                "src": edge.src_section,
-                "created_at": edge.created_at.isoformat() if edge.created_at else None,
-                "updated_at": None,
-            }
-            legacy_edges.append(legacy_edge)
-            
-        return legacy_edges
 
     def execute(self, state: TextbookState) -> TextbookState:
         """
@@ -237,8 +187,9 @@ class KGBuilder:
         state["kg_section_ids"] = kg_result.get("section_ids", [])
         state["book_id"] = kg_result.get("book_id")
         
-        logger.info(f"KGBuilder 完成，节点数: {len(kg_result['nodes'])}, 边数: {len(kg_result['edges'])}")
+        logger.info(f"KGBuilder 完成，节点数: {kg_result.get('total_nodes', 0)}, 边数: {kg_result.get('total_edges', 0)}")
         logger.info(f"生成的章节ID: {kg_result.get('section_ids', [])}")
+        logger.info(f"生成的book_id: {kg_result.get('book_id')}")
         
         return state
 

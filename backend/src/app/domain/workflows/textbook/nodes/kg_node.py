@@ -105,18 +105,42 @@ def kg_node(state: Dict[str, Any]) -> Dict[str, Any]:
                         "chapters_covered": [],
                     }
 
+        # 暂时跳过整书级合并，因为数据已经在Neo4j中
+        # book_graph_node会处理整书级的数据组织
+        logger.info(f"跳过内存整书级合并，数据已存储到Neo4j，section_ids: {section_ids}")
+        
+        # 生成book_id
+        from app.domain.kg.ids import generate_book_id
+        book_id = generate_book_id(topic, state.get("thread_id", ""))
+        logger.info(f"生成book_id: {book_id}")
+        
+        # 使用旧的合并方式为兼容性
         merger = KGMerger()
         merged_kg = merger.merge_multiple_kgs(list(kg_parts.values()))
 
         from app.domain.kg import KGEvaluator  # 仅用于类型与结构
+        from app.domain.kg.schemas import KGDict
+        
+        # 确保merged_kg是字典格式，兼容KGDict和普通字典
+        if isinstance(merged_kg, KGDict):
+            # 将KGDict转换为字典格式供评估器使用
+            merged_kg_dict = {
+                "nodes": [{"id": node.id, "name": node.name, "type": node.type, 
+                          "desc": node.desc, "aliases": node.aliases} for node in merged_kg.nodes],
+                "edges": [{"id": edge.id, "src": edge.src, "tgt": edge.tgt, 
+                          "type": edge.type, "desc": edge.desc} for edge in merged_kg.edges]
+            }
+        else:
+            merged_kg_dict = merged_kg
+            
         evaluator = KGEvaluator()
-        structure_analysis = evaluator.analyze_graph_structure(merged_kg)
-        relationship_analysis = evaluator.extract_node_relationships(merged_kg)
+        structure_analysis = evaluator.analyze_graph_structure(merged_kg_dict)
+        relationship_analysis = evaluator.extract_node_relationships(merged_kg_dict)
         all_keywords: List[str] = []
         for insight in all_insights:
             coverage = insight.get("knowledge_coverage", {})
             all_keywords.extend(coverage.get("covered_keywords", []))
-        coverage_analysis = evaluator.assess_knowledge_coverage(merged_kg, chapters, all_keywords)
+        coverage_analysis = evaluator.assess_knowledge_coverage(merged_kg_dict, chapters, all_keywords)
 
         aggregated_insights = {
             "kg_structure": structure_analysis,
@@ -140,7 +164,8 @@ def kg_node(state: Dict[str, Any]) -> Dict[str, Any]:
 
         result_state = state.copy()
         result_state["knowledge_graphs"] = kg_parts
-        result_state["merged_knowledge_graph"] = merged_kg
+        # 确保传递给book_graph_node的是字典格式
+        result_state["merged_knowledge_graph"] = merged_kg_dict
         result_state["cross_agent_insights"] = result_state.get("cross_agent_insights", {})
         result_state["cross_agent_insights"]["kg_builder"] = aggregated_insights
         result_state["kg_store_stats"] = aggregated_stats
@@ -162,6 +187,11 @@ def kg_node(state: Dict[str, Any]) -> Dict[str, Any]:
             result_state["section_ids"] = section_ids
             if "section_id" not in result_state:
                 result_state["section_id"] = section_ids[0]
+        
+        # 设置book_id到状态中
+        if book_id:
+            result_state["book_id"] = book_id
+            logger.info(f"设置book_id到状态: {book_id}")
 
         # 记统计
         try:

@@ -66,7 +66,7 @@ def get_metadata():
                     "description": "期望生成的章节数量",
                     "minimum": 3,
                     "maximum": 15,
-                    "default": 8
+                    "default": 3
                 },
                 "enable_qa": {
                     "type": "boolean",
