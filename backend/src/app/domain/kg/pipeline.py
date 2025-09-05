@@ -175,7 +175,14 @@ class KGPipeline:
         try:
             # 转换为旧格式以使用现有的评估逻辑
             legacy_format = self._kg_dict_to_legacy_format(kg_data)
-            return self.evaluator.evaluate_kg(legacy_format, input_data)
+            
+            # 转换KGPipelineInput为字典格式
+            input_dict = {
+                "chapters": [{"title": input_data.chapter_title, "content": input_data.content}],
+                "keywords": input_data.keywords
+            }
+            
+            return self.evaluator.evaluate_kg(legacy_format, input_dict)
         except Exception as e:
             self.logger.error(f"KG评估失败: {e}")
             return {}
@@ -317,11 +324,21 @@ class KGPipeline:
 
     def _apply_thresholds(self, kg: KGDict) -> KGDict:
         try:
-            edges = kg.get("edges", [])
+            # KGDict是TypedDict，应该像字典一样访问
+            edges = kg["edges"] if kg else []
+            nodes = kg["nodes"] if kg else []
+            
+            logger.debug(f"阈值过滤前: {len(nodes)} 节点, {len(edges)} 边")
+            
             filtered_edges = self.thresholds.filter_edges_for_storage(edges)
+            
+            # 创建新的KGDict
             filtered_kg = kg.copy()
             filtered_kg["edges"] = filtered_edges
             filtered_kg["total_edges"] = len(filtered_edges)
+            
+            logger.debug(f"阈值过滤后: {len(nodes)} 节点, {len(filtered_edges)} 边")
+            
             return filtered_kg
         except Exception as e:
             logger.error(f"阈值过滤失败: {e}")

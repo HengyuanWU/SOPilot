@@ -146,12 +146,15 @@ def fetch_book_graph(book_id: str) -> Optional[Dict[str, Any]]:
 
         scope = f"book:{book_id}" if not book_id.startswith("book:") else book_id
         
+        logger.info(f"查询book graph - book_id: {book_id}, scope: {scope}")
+        
         # 查询边（带全部属性）
         edges_query = (
             "MATCH ()-[r]->() WHERE r.scope = $scope "
             "RETURN properties(r) AS edge"
         )
         edge_rows: List[Dict[str, Any]] = store.client.execute_cypher(edges_query, {"scope": scope}) or []
+        logger.info(f"查询到 {len(edge_rows)} 条边数据")
         edges: List[Dict[str, Any]] = [row.get("edge", {}) for row in edge_rows if isinstance(row.get("edge"), dict)]
 
         if not edges:

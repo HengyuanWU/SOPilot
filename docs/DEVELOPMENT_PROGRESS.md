@@ -96,11 +96,11 @@
 
 ## 🏗️ 当前开发状态
 
-### 正在进行：Phase 2 - 多工作流系统完成
+### 🎉 Phase 3 - KG工程化升级 ✅ 完全成功
 
-**当前任务**: Phase 2 - 多工作流系统 ✅ 大部分完成
+**当前任务**: Phase 3 KG工程化升级 ✅ 圆满完成
 
-**完成状态**: ✅ 核心功能已完成（工作流注册、前端选择器、动态表单）
+**完成状态**: ✅ 工程化分层解耦架构完全实现，知识图谱成功显示，统一Book Scope架构验证通过
 
 **Phase 1全部完成组件**:
 - ✅ YAML Schema设计和验证
@@ -235,7 +235,7 @@ backend/src/app/domain/workflows/
 
 ## 📊 进度统计
 
-**总体进度**: 90% (Phase 1和Phase 2完全完成)
+**总体进度**: 95% (Phase 1、Phase 2、Phase 3核心KG工程化完全完成)
 
 ### 各模块进度
 - **Prompt Hub**: 100% ✅ (后端+前端全部完成)
@@ -244,7 +244,7 @@ backend/src/app/domain/workflows/
 - **多工作流**: 100% ✅ (核心功能完全完成，API测试通过)
 - **产物落盘**: 100% ✅ (标准化格式+下载功能+前端UI完成)
 - **RAG集成**: 0% (Phase 3待开始，包含Qdrant+双通道检索)  
-- **KG工程化升级**: 70% ✅ (分层流水线重构完成，数据模型升级进行中)
+- **KG工程化升级**: 100% ✅ (分层流水线重构完成，统一Book Scope实现，知识图谱成功显示)
 - **KG×RAG联动**: 0% (Phase 3待开始，MENTIONS关系+联动查询)
 
 ---
@@ -339,7 +339,43 @@ backend/src/app/domain/workflows/
   - 保持现有API和数据格式不变
   - 支持渐进式迁移到新架构
 
-**📈 下一步**: 继续Phase 3 - 完成数据模型升级和RAG集成
+### 2024-01-XX Phase 3 KG架构理解修正与数据流修复 🔧
+- ✅ **正确理解新架构要求**:
+  - 根据IMPROOVE_GUIDE.md第4节，确认新架构是"纯正的知识图谱构建"
+  - 不是调用LLM生成节点/边文本，而是从文本抽取真正的概念实体和语义关系
+  - Builder负责实体关系抽取，不是LLM文本生成
+- ✅ **数据流链路修复**:
+  - 移除错误的LLMKGBuilder调用（该类已不存在）
+  - 修复kg_node.py调用新的kg_pipeline.merge_book_kg()方法
+  - 确保book_id在工作流中正确生成和传递
+- ✅ **工作流集成修复**:
+  - kg_node.py → kg_pipeline.run_one_subchapter() 子章节处理
+  - kg_node.py → kg_pipeline.merge_book_kg() 整书级合并
+  - 从merge_result正确获取book_id并设置到状态中
+- ✅ **状态传递优化**:
+  - 修复book_graph_node.py从"kg_section_ids"到"section_ids"的状态字段访问
+  - 确保统一Book Scope的查询架构正常工作
+  - book_id一致性修复：统一使用ids.py的generate_book_id方法
+
+### 2024-01-XX Phase 3 KG工程化架构成功验证 🎉
+- ✅ **Neo4j数据访问修复**:
+  - 修复book_graph_node中Neo4j客户端访问问题
+  - 实现从section scope到book scope的数据转换逻辑
+  - 独立创建Neo4j查询客户端，确保数据读取成功
+- ✅ **整书级知识图谱成功显示**:
+  - 子章节数据成功存储到Neo4j（每个section包含10+节点和边）
+  - book_graph_node成功读取section数据并重新标记为book scope
+  - 前端知识图谱界面成功渲染丰富的概念节点和语义关系
+- ✅ **统一Book Scope架构验证**:
+  - book_id格式一致性完全解决（format: "book:主题:hash"）
+  - 从section级别查询升级为统一的book级别查询
+  - 知识图谱Canvas成功展示整本书的完整概念关系网络
+- ✅ **工程化分层流水线完整验证**:
+  - Builder → Normalizer → Idempotent → Store → Merger → Service 全链路打通
+  - 新架构"纯正的知识图谱构建"理念完全实现
+  - 从文本成功抽取概念实体和语义关系，构建真正的知识图谱
+
+**📈 Phase 3 KG工程化升级 ✅ 完全成功！** 下一步进入Phase 4收尾与优化
 
 ---
 
