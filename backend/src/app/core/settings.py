@@ -43,6 +43,32 @@ class Neo4jSettings(BaseModel):
     database: Optional[str] = None
 
 
+class QdrantSettings(BaseModel):
+    url: str = "http://qdrant:6333"
+    api_key: Optional[str] = None
+    collection: str = "kb_chunks"
+    distance: str = "cosine"
+    hnsw_m: int = 16
+    hnsw_ef_construction: int = 128
+    optimizer_mem_limit_mb: int = 2048
+
+
+class RAGSettings(BaseModel):
+    base_dir: str = "knowledge_base"
+    embed_model: str = "BAAI/bge-small-zh-v1.5"
+    embed_provider: str = "siliconflow"  # embedding模型提供商
+    chunk_size: int = 800
+    chunk_overlap: int = 120
+    top_k: int = 4
+    vector_top_k: int = 12
+    kg_top_k: int = 8
+    use_reranker: bool = False
+    alpha: float = 0.7  # 向量检索权重
+    beta: float = 0.3   # KG检索权重
+    hop: int = 2        # KG跳数限制
+    rel_types: List[str] = Field(default_factory=list)  # KG关系类型白名单
+
+
 class AppSettings(BaseSettings):
     # 基础
     app_name: str = "SOPilot API"
@@ -62,6 +88,10 @@ class AppSettings(BaseSettings):
 
     # Neo4j
     neo4j: Neo4jSettings = Field(default_factory=Neo4jSettings)
+
+    # RAG 配置
+    qdrant: QdrantSettings = Field(default_factory=QdrantSettings)
+    rag: RAGSettings = Field(default_factory=RAGSettings)
 
     # ENV 优先（允许使用 backend/.env 本地文件）
     model_config = SettingsConfigDict(

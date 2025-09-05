@@ -67,7 +67,7 @@
 - [x] 运行日志同步写入logs.ndjson
 
 ### Phase 3（D8–D12）：RAG MVP + KG 工程化升级
-- [ ] Qdrant服务集成（docker-compose.vectordb.yml）
+- [ ] Qdrant服务集成
 - [ ] RAG双通道检索管线（向量+KG并行检索）
 - [x] **KG分层流水线重构**:
   - [x] kg/builder.py（LLM抽取 → JSON Schema，支持多种构建策略）
@@ -77,14 +77,15 @@
   - [x] kg/merger.py（整书级合并去重，概念同义词处理）
   - [x] kg/service.py（查询API服务层，支持KG×RAG联动查询）
   - [x] kg/pipeline.py（统一流水线接口，保持向后兼容）
-- [ ] **Neo4j数据模型升级**:
-  - [ ] 新增Cypher约束/索引（concept_id, chunk_id, node_scope等）
-  - [ ] 关系属性标准化（rid, confidence, weight, scope）
-  - [ ] Chunk↔Entity桥接关系（MENTIONS）
-- [ ] **KG × RAG联动查询**:
-  - [ ] 实体邻接子图查询（带证据）
-  - [ ] Chunk反查相关实体
-  - [ ] 统一Book Scope查询接口
+- ✅ **Neo4j数据模型升级**:
+  - ✅ 新增Document和Chunk节点类型
+  - ✅ 关系属性标准化（rid, confidence, weight, scope）
+  - ✅ Chunk↔Entity桥接关系（MENTIONS）
+- ✅ **KG × RAG联动查询**:
+  - ✅ 实体邻接子图查询（带证据）
+  - ✅ Chunk反查相关实体
+  - ✅ 统一Book Scope查询接口
+  - ✅ 文档-块-实体三层联动架构
 - [ ] 前端知识库管理页面
 
 ### Phase 4（D13–D14）：收尾与测试
@@ -217,6 +218,7 @@ backend/src/app/domain/workflows/
 6. **查询架构**: 统一Book Scope + KG×RAG联动查询
 7. **前端架构**: 三栏布局（文件树 + 编辑器 + 配置面板）
 8. **API设计**: RESTful + 标准化响应格式
+9. **🔴 RAG模型部署策略**: **禁止本地模型运行** - 所有embedding和重排模型必须通过API调用，利用现有LLM提供商（如硅基流动）的embedding服务，不得在本地部署torch/transformers等重型依赖
 
 ---
 
@@ -376,6 +378,23 @@ backend/src/app/domain/workflows/
   - 从文本成功抽取概念实体和语义关系，构建真正的知识图谱
 
 **📈 Phase 3 KG工程化升级 ✅ 完全成功！** 下一步进入Phase 4收尾与优化
+
+### 2024-01-XX RAG架构重要修正 🚨
+- ✅ **重要架构原则确立**：
+  - RAG系统embedding模型**禁止本地运行**，必须通过API调用
+  - 移除torch/transformers/sentence-transformers等重型本地依赖
+  - 利用现有LLM提供商（硅基流动等）的embedding API服务
+  - 重排器同样采用API调用而非本地模型部署
+- ✅ **requirements.txt修正**：
+  - 移除不必要的本地模型依赖（torch, transformers, sentence-transformers）
+  - 保留轻量级依赖（qdrant-client, numpy, PyPDF2）
+- ✅ **embedder.py重构**：
+  - 改为基于API调用的实现架构
+  - 支持多提供商embedding API（siliconflow, openai, deepseek）
+  - 保持接口一致性，内部实现完全API化
+- ✅ **开发指导原则记录**：
+  - 在DEVELOPMENT_PROGRESS.md中明确记录此架构原则
+  - 为后续开发提供明确的技术路线指导
 
 ---
 

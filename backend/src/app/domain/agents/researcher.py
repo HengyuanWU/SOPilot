@@ -36,12 +36,44 @@ class Researcher:
             "概念1, 概念2, 概念3, ...\n"
         )
 
-    def generate_subchapter_research(self, topic: str, subchapter_title: str, subchapter_outline: str, language: str = "中文") -> SubchapterResearch:
-        """Generate subchapter research using YAML-based prompt system."""
+    def _enhance_research_with_rag(self, topic: str, subchapter_title: str, subchapter_outline: str) -> str:
+        """使用RAG增强研究内容"""
         try:
+            from ...services.rag_service import rag_service
+            
+            # 构建查询
+            query = f"{topic} {subchapter_title}"
+            if subchapter_outline:
+                query += f" {subchapter_outline[:200]}"  # 限制大纲长度
+            
+            # 获取相关上下文
+            context = rag_service.get_context_for_topic(query, max_length=800)
+            
+            if context:
+                logger.info(f"RAG为子章节 '{subchapter_title}' 提供了上下文支持")
+                return f"\n\n## 参考资料\n{context}\n\n"
+            else:
+                logger.debug(f"RAG未找到子章节 '{subchapter_title}' 的相关上下文")
+                return ""
+                
+        except Exception as e:
+            logger.warning(f"RAG增强失败: {e}")
+            return ""
+
+    def generate_subchapter_research(self, topic: str, subchapter_title: str, subchapter_outline: str, language: str = "中文") -> SubchapterResearch:
+        """Generate subchapter research using YAML-based prompt system with optional RAG enhancement."""
+        try:
+            # Try to enhance with RAG if available
+            enhanced_research = self._enhance_research_with_rag(topic, subchapter_title, subchapter_outline)
+            
+            # Merge RAG context into subchapter outline if available
+            enhanced_outline = subchapter_outline
+            if enhanced_research:
+                enhanced_outline = f"{subchapter_outline}\n{enhanced_research}"
+            
             # Use migration helper for YAML-based call
             from ...services.migration_service import migration_helper
-            research_result = migration_helper.call_researcher(topic, subchapter_title, subchapter_outline)
+            research_result = migration_helper.call_researcher(topic, subchapter_title, enhanced_outline)
             
             if not research_result or not research_result.get("raw_content"):
                 raise RuntimeError(f"子章节 '{subchapter_title}' 研究内容生成失败（API空响应）")
