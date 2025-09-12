@@ -16,6 +16,27 @@ services:
       - 8.8.8.8
       - 1.1.1.1
 
+  qdrant:
+    image: qdrant/qdrant:latest
+    container_name: sopilot-qdrant
+    environment:
+      # —— 显式禁用可能遗留的代理变量 ——
+      - HTTP_PROXY=
+      - HTTPS_PROXY=
+      - http_proxy=
+      - https_proxy=
+      - NO_PROXY=
+      - no_proxy=
+    ports:
+      - "6333:6333"
+      - "6334:6334"
+    volumes:
+      - qdrant_data:/qdrant/storage
+    restart: unless-stopped
+    dns:
+      - 8.8.8.8
+      - 1.1.1.1
+
   backend:
     build: .
     container_name: sopilot-backend
@@ -31,6 +52,10 @@ services:
       - APP_NEO4J__USER=neo4j
       - APP_NEO4J__PASSWORD=test1234
       - APP_NEO4J__DATABASE=neo4j
+      # —— Qdrant 配置 ——
+      - APP_QDRANT__URL=http://qdrant:6333
+      - APP_QDRANT__COLLECTION=kb_chunks
+      - APP_QDRANT__DISTANCE=cosine
       # —— 使用国内 PyPI 镜像，减少构建/启动时的网络波动 ——
       - PIP_INDEX_URL=https://pypi.tuna.tsinghua.edu.cn/simple
       - PIP_TRUSTED_HOST=pypi.tuna.tsinghua.edu.cn
@@ -45,13 +70,17 @@ services:
       - "8000:8000"
     depends_on:
       - neo4j
+      - qdrant
     command: >
       sh -c "
-      pip install -r backend/requirements.txt &&
-      python -m uvicorn app.asgi:app --host 0.0.0.0 --port 8000 --app-dir backend/src --reload
+      pip install -r /app/backend/requirements.txt &&
+      python -m uvicorn app.asgi:app --host 0.0.0.0 --port 8000 --app-dir /app/backend/src --reload
       "
     volumes:
-      - .:/app
+      # 仅挂载后端源码与依赖清单，避免覆盖 /app 下其他内容
+      - ./backend/src:/app/backend/src
+      - ./backend/requirements.txt:/app/backend/requirements.txt
+      # 业务输出可单独挂载
       - ./output:/app/output
     restart: unless-stopped
     dns:
@@ -96,3 +125,4 @@ services:
 volumes:
   neo4j_data:
   neo4j_logs:
+  qdrant_data:

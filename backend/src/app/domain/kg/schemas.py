@@ -10,7 +10,7 @@ class NodeDict(TypedDict):
     id: str
     type: str
     name: str
-    description: Optional[str]
+    desc: Optional[str]
     canonical_key: Optional[str]
     aliases: List[str]
     chapter: Optional[str]
@@ -30,11 +30,38 @@ class EdgeDict(TypedDict):
     target_name: Optional[str]
     weight: Optional[float]
     confidence: Optional[float]
-    evidence: Optional[str]
+    desc: Optional[str]
     chapter: Optional[str]
     src: Optional[str]
     created_at: Optional[str]
     updated_at: Optional[str]
+
+
+class DocumentDict(TypedDict):
+    """文档节点"""
+    id: str
+    filename: str
+    filepath: str
+    content_type: str
+    size: int
+    checksum: str
+    metadata: Dict[str, Any]
+    indexed_at: Optional[str]
+    created_at: Optional[str]
+
+
+class ChunkDict(TypedDict):
+    """文档块节点"""
+    id: str
+    doc_id: str
+    chunk_index: int
+    content: str
+    content_hash: str
+    start_char: int
+    end_char: int
+    vector_id: Optional[str]  # Qdrant中的点ID
+    metadata: Dict[str, Any]
+    created_at: Optional[str]
 
 
 class KGDict(TypedDict):

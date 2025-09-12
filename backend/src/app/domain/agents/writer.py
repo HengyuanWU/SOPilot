@@ -45,6 +45,42 @@ class Writer:
             "请为子章节「{subchapter_title}」撰写专业、系统、实用的教材内容。"
         )
 
+    def _enhance_writing_with_rag(self, topic: str, subchapter_title: str, subchapter_keywords: List[str], research_summary: str) -> str:
+        """使用RAG增强写作内容"""
+        try:
+            from ...services.rag_service import rag_service
+            
+            # 构建查询：结合主题、子章节标题和关键词
+            query_parts = [topic, subchapter_title]
+            if subchapter_keywords:
+                query_parts.extend(subchapter_keywords[:3])  # 只取前3个关键词
+            query = " ".join(query_parts)
+            
+            # 获取增强的材料
+            evidence = rag_service.retrieve_evidence(
+                query=query,
+                top_k=3,
+                include_kg=True
+            )
+            
+            if evidence and evidence.get("evidence"):
+                logger.info(f"RAG为子章节写作 '{subchapter_title}' 提供了 {len(evidence['evidence'])} 条参考材料")
+                
+                # 构建参考材料文本
+                reference_materials = []
+                for i, ev in enumerate(evidence["evidence"], 1):
+                    content_preview = ev["content"][:300] + "..." if len(ev["content"]) > 300 else ev["content"]
+                    reference_materials.append(f"[{i}] {content_preview}")
+                
+                return f"\n\n## 写作参考材料\n" + "\n\n".join(reference_materials) + "\n\n"
+            else:
+                logger.debug(f"RAG未找到子章节写作 '{subchapter_title}' 的相关材料")
+                return ""
+                
+        except Exception as e:
+            logger.warning(f"RAG写作增强失败: {e}")
+            return ""
+
     def write_subchapter(
         self,
         subchapter_title: str,
@@ -63,13 +99,18 @@ class Writer:
             rewrite_instructions = ""
             if rewrite_suggestions:
                 rewrite_instructions = f"重写建议：{rewrite_suggestions}\n\n请根据以上重写建议进行改进。"
+            
+            # RAG增强：获取参考材料
+            rag_materials = self._enhance_writing_with_rag(topic, subchapter_title, subchapter_keywords, research_summary)
+            enhanced_research_summary = research_summary + rag_materials
+            
             keywords_str = ", ".join(subchapter_keywords) if subchapter_keywords else "无"
             prompt = self.writer_prompt_template.format(
                 topic=topic,
                 subchapter_title=subchapter_title,
                 subchapter_outline=subchapter_outline,
                 subchapter_keywords=keywords_str,
-                research_summary=research_summary,
+                research_summary=enhanced_research_summary,  # 使用增强后的研究总结
                 chapter_title=chapter_title,
                 language=language,
                 rewrite_instructions=rewrite_instructions,
@@ -81,7 +122,7 @@ class Writer:
                 subchapter_title=subchapter_title,
                 subchapter_outline=subchapter_outline,
                 subchapter_keywords=keywords_str,
-                research_summary=research_summary,
+                research_summary=enhanced_research_summary,  # 传递增强后的研究总结
                 chapter_title=chapter_title,
                 language=language,
                 rewrite_instructions=rewrite_instructions

@@ -83,20 +83,20 @@
 
           <!-- 表单编辑模式 -->
           <div v-if="editMode === 'form'" class="form-editor">
-            <div class="form-section">
-              <label>Agent</label>
-              <input v-model="editingPrompt.agent" type="text" readonly>
-            </div>
+              <div class="form-section">
+                <label>Agent</label>
+                <input v-model="editingPrompt.agent" type="text" readonly>
+              </div>
 
-            <div class="form-section">
-              <label>语言/地区</label>
-              <input v-model="editingPrompt.locale" type="text">
-            </div>
+              <div class="form-section">
+                <label>语言/地区</label>
+                <input v-model="editingPrompt.locale" type="text">
+              </div>
 
-            <div class="form-section">
-              <label>模型配置</label>
-              <input v-model="editingPrompt.model" type="text" placeholder="例: siliconflow:Qwen/Qwen3-Coder-30B-A3B-Instruct">
-            </div>
+              <div class="form-section">
+                <label>模型配置</label>
+                <input v-model="editingPrompt.model" type="text" placeholder="例: siliconflow:Qwen/Qwen3-Coder-30B-A3B-Instruct">
+              </div>
 
             <div class="form-section">
               <label>System消息</label>
@@ -118,19 +118,19 @@
               ></textarea>
             </div>
 
-            <div class="form-section">
-              <label>参数配置</label>
-              <div class="param-grid">
-                <div class="param-item">
-                  <label>Temperature</label>
-                  <input v-model.number="editingPrompt.meta.temperature" type="number" step="0.1" min="0" max="2">
-                </div>
-                <div class="param-item">
-                  <label>Max Tokens</label>
-                  <input v-model.number="editingPrompt.meta.max_tokens" type="number" min="1">
+              <div class="form-section">
+                <label>参数配置</label>
+                <div class="param-grid">
+                  <div class="param-item">
+                    <label>Temperature</label>
+                    <input v-model.number="editingPrompt.meta.temperature" type="number" step="0.1" min="0" max="2">
+                  </div>
+                  <div class="param-item">
+                    <label>Max Tokens</label>
+                    <input v-model.number="editingPrompt.meta.max_tokens" type="number" min="1">
+                  </div>
                 </div>
               </div>
-            </div>
           </div>
 
           <!-- YAML编辑模式 -->
@@ -230,7 +230,7 @@ export default {
   methods: {
     async loadPrompts() {
       try {
-        const response = await api.get('/prompts')
+        const response = await api.get('/api/v1/prompts')
         this.prompts = response.data
       } catch (error) {
         console.error('加载Prompt列表失败:', error)
@@ -246,8 +246,14 @@ export default {
       this.validationResult = null
       
       try {
-        const response = await api.get(`/prompts/${prompt.id}`)
+        const response = await api.get(`/api/v1/prompts/${prompt.path}`)
         this.editingPrompt = JSON.parse(JSON.stringify(response.data))
+        
+        // 确保meta对象存在
+        if (!this.editingPrompt.meta) {
+          this.editingPrompt.meta = {}
+        }
+        
         this.yamlContent = yaml.dump(this.editingPrompt, { 
           defaultFlowStyle: false,
           allowUnicode: true
@@ -271,7 +277,7 @@ export default {
           promptData = yaml.load(this.yamlContent)
         }
         
-        const response = await api.post('/prompts/validate', promptData)
+        const response = await api.post('/api/v1/prompts/validate', promptData)
         this.validationResult = { success: true, data: response.data }
         this.$message?.success('Prompt校验通过')
       } catch (error) {
@@ -297,14 +303,14 @@ export default {
           promptData = yaml.load(this.yamlContent)
         }
         
-        await api.put(`/prompts/${this.selectedPrompt.id}`, promptData)
+        await api.put(`/api/v1/prompts/${this.selectedPrompt.path}`, promptData)
         this.$message?.success('Prompt保存成功')
         
         // 刷新列表
         await this.loadPrompts()
         
         // 更新选中的prompt
-        const updated = this.prompts.find(p => p.id === this.selectedPrompt.id)
+        const updated = this.prompts.find(p => p.path === this.selectedPrompt.path)
         if (updated) {
           this.selectedPrompt = updated
         }
