@@ -1,6 +1,6 @@
 import { ref, onMounted, onUnmounted, watch } from 'vue';
 import cytoscape from 'cytoscape';
-import { getKgSection } from '../services/api';
+import { getKnowledgeGraph } from '../services/api';
 const props = defineProps();
 const graphContainer = ref();
 const loading = ref(false);
@@ -108,13 +108,13 @@ const initCytoscape = () => {
         console.log('边详情:', edge.data());
     });
 };
-const loadGraphData = async (sectionId) => {
+const loadGraphData = async () => {
     if (!cy)
         return;
     loading.value = true;
     error.value = '';
     try {
-        const data = await getKgSection(sectionId);
+        const data = await getKnowledgeGraph(props.bookId, props.sectionId);
         if (!data.nodes || !data.edges) {
             throw new Error('图谱数据格式错误');
         }
@@ -125,17 +125,17 @@ const loadGraphData = async (sectionId) => {
                     id: node.id,
                     label: node.label || node.name || node.id,
                     type: node.type || 'concept',
-                    ...node.properties
+                    ...(node.properties || {})
                 }
             })),
             ...data.edges.map((edge) => ({
                 data: {
-                    id: edge.id || `${edge.source}-${edge.target}`,
-                    source: edge.source,
-                    target: edge.target,
+                    id: edge.id || `${(edge.source || edge.source_id)}-${(edge.target || edge.target_id)}`,
+                    source: edge.source || edge.source_id,
+                    target: edge.target || edge.target_id,
                     label: edge.label || edge.type || '',
                     type: edge.type || 'relation',
-                    ...edge.properties
+                    ...(edge.properties || {})
                 }
             }))
         ];
@@ -156,8 +156,8 @@ const loadGraphData = async (sectionId) => {
     }
 };
 const refreshGraph = () => {
-    if (props.sectionId) {
-        loadGraphData(props.sectionId);
+    if (props.bookId || props.sectionId) {
+        loadGraphData();
     }
 };
 const resetLayout = () => {
@@ -165,10 +165,10 @@ const resetLayout = () => {
         cy.layout({ name: 'cose' }).run();
     }
 };
-// 监听 sectionId 变化
-watch(() => props.sectionId, (newSectionId) => {
-    if (newSectionId) {
-        loadGraphData(newSectionId);
+// 监听 props 变化
+watch([() => props.bookId, () => props.sectionId], ([newBookId, newSectionId]) => {
+    if (newBookId || newSectionId) {
+        loadGraphData();
     }
 }, { immediate: true });
 onMounted(() => {
@@ -201,6 +201,12 @@ __VLS_asFunctionalElement(__VLS_intrinsicElements.div, __VLS_intrinsicElements.d
     ...{ class: "kg-graph-header" },
 });
 __VLS_asFunctionalElement(__VLS_intrinsicElements.h3, __VLS_intrinsicElements.h3)({});
+(props.bookId ? '整本书知识图谱' : '知识图谱');
+if (props.bookId) {
+    __VLS_asFunctionalElement(__VLS_intrinsicElements.p, __VLS_intrinsicElements.p)({
+        ...{ class: "graph-description" },
+    });
+}
 __VLS_asFunctionalElement(__VLS_intrinsicElements.div, __VLS_intrinsicElements.div)({
     ...{ class: "graph-controls" },
 });
@@ -235,6 +241,7 @@ if (__VLS_ctx.graphStats) {
 }
 /** @type {__VLS_StyleScopedClasses['kg-graph-container']} */ ;
 /** @type {__VLS_StyleScopedClasses['kg-graph-header']} */ ;
+/** @type {__VLS_StyleScopedClasses['graph-description']} */ ;
 /** @type {__VLS_StyleScopedClasses['graph-controls']} */ ;
 /** @type {__VLS_StyleScopedClasses['btn']} */ ;
 /** @type {__VLS_StyleScopedClasses['btn-secondary']} */ ;

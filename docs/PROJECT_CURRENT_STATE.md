@@ -1,6 +1,8 @@
 # SOPilot 项目现状说明书
 
 > 目标：让**新接手的开发者**在 1–2 小时内通过本文档了解代码逻辑、模块协作、运行方式与前端形态，并能在 1 天内完成一次小特性或修复。
+> 
+> **最后更新**: 2025-09-12 - 基于实际架构的完整更新，涵盖RAG+KG双引擎、多工作流、Prompt工程化等所有核心功能。
 
 ---
 
@@ -117,10 +119,16 @@ APP_NEO4J__USER=neo4j
 APP_NEO4J__PASSWORD=test1234
 APP_NEO4J__DATABASE=neo4j
 
-# 可选：中间件配置
+# 可选：中间件配置（实际环境变量名称）
 APP_MIDDLEWARE__MAX_RETRIES=3
 APP_MIDDLEWARE__DEFAULT_TIMEOUT=300
 APP_MIDDLEWARE__REQUESTS_PER_MINUTE=60
+
+# 或使用Worker级配置
+WRITER_MAX_WORKERS=50
+WRITER_TIMEOUT=120
+VALIDATOR_PASS_THRESHOLD=7.0
+VALIDATOR_MAX_REWRITE_ATTEMPTS=1
 ```
 
 #### 验证安装
@@ -177,18 +185,21 @@ docker logs sopilot-neo4j
 
 ### 1.1 一句话说明
 
-本项目是一个基于 **LangGraph + FastAPI + Vue3 + Neo4j 的多智能体教材生成平台**，支持智能教材创作与知识图谱构建。
+本项目是一个基于 **LangGraph + FastAPI + Vue3 + Neo4j + Qdrant 的现代化AI教材生成平台**，集成RAG检索增强、多工作流编排、Prompt工程化管理，支持智能教材创作、知识图谱构建与可视化。
 
 #### 技术栈详细版本
 
 **后端技术栈：**
-- **FastAPI 0.115.2**：现代化Python Web框架，提供自动API文档生成
+- **FastAPI 0.115.2**：现代化Python Web框架，RESTful API + OpenAPI文档
 - **Uvicorn 0.30.6**：ASGI服务器，支持异步和高性能
-- **Pydantic 2.9.2**：数据验证和序列化，类型安全
-- **LangGraph (latest)**：工作流编排引擎，支持复杂的多智能体协作
-- **LangChain Core + OpenAI**：LLM抽象层和提供商集成
-- **Neo4j 5.23.1**：图数据库驱动，知识图谱存储
-- **HTTPx 0.27.2**：异步HTTP客户端
+- **Pydantic 2.9.2**：数据验证和序列化，严格类型安全
+- **LangGraph (latest)**：工作流编排引擎，支持复杂的多智能体协作和状态管理
+- **LangChain Core + OpenAI**：LLM抽象层，多Provider统一接口
+- **Neo4j 5.23.1**：图数据库驱动，知识图谱存储与查询
+- **Qdrant Client 1.7.0+**：向量数据库客户端，语义检索
+- **HTTPx 0.27.2**：异步HTTP客户端，支持并发调用
+- **Jinja2 3.1.4**：模板引擎，Prompt动态渲染
+- **PyYAML 6.0.2**：YAML解析，配置文件管理
 
 **前端技术栈：**
 - **Vue 3.4.0**：组合式API，响应式框架
@@ -200,9 +211,10 @@ docker logs sopilot-neo4j
 - **Cytoscape 3.33.1**：图可视化库，用于知识图谱展示
 
 **基础设施：**
-- **Docker + Docker Compose**：容器化部署
-- **Neo4j 5.21.0**：图数据库服务
-- **PowerShell**：跨平台自动化脚本
+- **Docker + Docker Compose**：容器化编排部署
+- **Neo4j 5.21.0**：图数据库服务，支持Cypher查询
+- **Qdrant (latest)**：向量数据库服务，支持高性能向量检索
+- **PowerShell Core**：跨平台自动化脚本和开发工具
 
 
 ### 1.2 架构图（简版）
@@ -210,32 +222,64 @@ docker logs sopilot-neo4j
 > 可先用文字/表格描述，或粘贴架构图链接；若用 Mermaid：
 
 ```mermaid
-flowchart LR
-  UI[Vue3 Frontend]
-  API[FastAPI Backend]
-  WF[LangGraph Workflows]
-  NEO[(Neo4j)]
-  LLM[LLM Providers]
+flowchart TB
+  subgraph "前端层"
+    UI[Vue3 + TypeScript Frontend]
+    PS[PromptStudio]
+    KB[KnowledgeBase]
+  end
+  
+  subgraph "API层"
+    API[FastAPI Backend]
+    RUNS[Runs API]
+    WFS[Workflows API]
+    PRMT[Prompts API]
+    RAG[RAG API]
+    KG[KG API]
+  end
+  
+  subgraph "业务层"
+    WF[LangGraph Workflows]
+    AGT[Multi-Agents]
+    RG[RAG Pipeline]
+  end
+  
+  subgraph "数据层"
+    NEO[(Neo4j KG)]
+    QDR[(Qdrant Vector)]
+    FS[File System]
+  end
+  
+  subgraph "外部服务"
+    LLM[LLM Providers]
+    EMB[Embedding Services]
+  end
 
-  UI -->|REST API| API
+  UI --> API
+  PS --> PRMT
+  KB --> RAG
   API --> WF
+  WF --> AGT
+  AGT --> RG
+  RG --> QDR
   WF --> NEO
-  WF --> LLM
-  API --> NEO
-  UI -->|/api/v1/kg| API
+  AGT --> LLM
+  RG --> EMB
+  API --> FS
 ```
 
 ### 1.3 运行形态 & 部署
 
 * 本地：`Python 3.11+`、`Node.js 20+`、`Neo4j 5.21+`、`Docker 26+`
-* 服务器：Docker Compose 部署
+* 服务器：Docker Compose 编排部署
 * 端口占用表：
 
   | 服务 | 端口 | 说明 |
   | ---- | ---- | ---- |
-  | Frontend | 5173 | Vite Dev Server |
-  | Backend | 8000 | FastAPI |
-  | Neo4j | 7474/7687 | Web Console/Bolt |
+  | Frontend | 5173 | Vite Dev Server / SPA |
+  | Backend | 8000 | FastAPI + Auto OpenAPI Docs |
+  | Neo4j | 7474/7687 | Web Console / Bolt Protocol |
+  | Qdrant | 6333/6334 | Vector DB API / gRPC |
 
 ---
 
@@ -249,36 +293,74 @@ SOPilot/
 │   └── src/app/
 │       ├── main.py              # FastAPI 应用入口
 │       ├── asgi.py              # ASGI 入口
-│       ├── api/v1/              # API 路由
-│       │   ├── runs.py          # 运行管理路由
-│       │   └── kg.py            # 知识图谱路由
+│       ├── api/v1/              # RESTful API路由
+│       │   ├── router.py        # API路由聚合器
+│       │   ├── runs.py          # 运行管理API
+│       │   ├── workflows.py     # 工作流API
+│       │   ├── prompts.py       # Prompt管理API
+│       │   ├── rag.py           # RAG检索API
+│       │   └── kg.py            # 知识图谱API
 │       ├── core/                # 核心基础设施
-│       │   ├── settings.py      # 配置管理
-│       │   ├── logging.py       # 日志配置
-│       │   └── progress_manager.py # 进度管理
-│       ├── domain/              # 领域层
-│       │   ├── workflows/       # LangGraph 工作流
+│       │   ├── settings.py      # 分层配置管理
+│       │   ├── logging.py       # 结构化日志
+│       │   ├── lifecycle.py     # 应用生命周期
+│       │   ├── concurrency.py   # 并发控制
+│       │   └── progress_manager.py # 实时进度管理
+│       ├── domain/              # 领域驱动设计层
+│       │   ├── workflows/       # 多工作流编排
+│       │   │   ├── registry.py  # 工作流注册中心
+│       │   │   ├── textbook/    # 教材生成工作流
+│       │   │   └── quiz_maker/  # 问答生成工作流
 │       │   ├── agents/          # 智能体实现
-│       │   ├── kg/              # 知识图谱模块
+│       │   │   ├── planner.py   # 规划智能体
+│       │   │   ├── researcher.py # 研究智能体
+│       │   │   ├── writer.py    # 写作智能体
+│       │   │   └── validator.py # 验证智能体
+│       │   ├── kg/              # 知识图谱引擎
+│       │   │   ├── pipeline.py  # KG构建流水线
+│       │   │   ├── builder.py   # 实体关系抽取
+│       │   │   └── service.py   # KG查询服务
+│       │   ├── prompts/         # Prompt模板管理
 │       │   └── state/           # 状态定义
 │       ├── infrastructure/      # 基础设施层
-│       │   ├── llm/             # LLM 客户端
-│       │   └── graph_store/     # 图数据库
+│       │   ├── llm/             # LLM路由与适配
+│       │   │   ├── router/      # 多Provider路由
+│       │   │   └── providers/   # Provider实现
+│       │   ├── rag/             # RAG检索引擎
+│       │   │   ├── pipeline.py  # RAG主管线
+│       │   │   ├── vectorstores/ # 向量存储
+│       │   │   ├── kgstores/    # KG存储
+│       │   │   ├── retrievers/  # 检索器
+│       │   │   └── rerankers/   # 重排器
+│       │   ├── graph_store/     # 图数据库
+│       │   └── storage/         # 文件存储
 │       └── services/            # 服务层
+│           ├── workflow_service.py # 工作流服务
+│           ├── prompt_service.py   # Prompt服务
+│           └── llm_service.py      # LLM服务
 ├── frontend/
 │   └── src/
-│       ├── main.ts              # Vue3 入口
-│       ├── router/index.ts      # 路由配置
+│       ├── main.ts              # Vue3 + TypeScript入口
+│       ├── App.vue              # 根组件(现代化导航)
+│       ├── router/index.ts      # Vue Router配置
 │       ├── views/               # 页面组件
-│       │   ├── Home.vue         # 创建运行页面
-│       │   └── RunDetail.vue    # 运行详情页面
-│       ├── components/          # 通用组件
+│       │   ├── Home.vue         # 工作流选择页面
+│       │   ├── RunDetail.vue    # 运行详情页面
+│       │   ├── PromptStudio.vue # Prompt编辑器
+│       │   └── KnowledgeBase.vue # 知识库管理
+│       ├── components/          # 可复用组件
 │       │   ├── RunConsole.vue   # 运行控制台
 │       │   └── KgGraph.vue      # 知识图谱可视化
-│       ├── store/runs.ts        # 状态管理
-│       └── services/api.ts      # API 封装
-├── docker-compose.yml           # 服务编排
-└── scripts/dev.ps1              # 开发脚本
+│       ├── store/               # Pinia状态管理
+│       │   └── runs.ts          # 运行状态Store
+│       └── services/api.ts      # API客户端封装
+├── docker-compose.yml           # 容器编排配置
+├── knowledge_base/              # RAG知识库目录
+│   ├── chunks/                  # 分块存储
+│   ├── raw/                     # 原始文档
+│   └── snapshots/               # 快照备份
+├── output/                      # 运行产物输出
+└── scripts/dev.ps1              # 开发自动化脚本
 ```
 
 ### 2.2 命名与风格
@@ -296,9 +378,13 @@ SOPilot/
 
 | 用例 | 入口页面 | 主要交互 | 后端路由 | 工作流/服务 | 产出 |
 | ---- | -------- | -------- | -------- | ----------- | ---- |
-| 教材生成 | `/` | 输入主题→点击创建 | `POST /api/v1/runs` | `TextbookWorkflow` | 教材内容、KG节点、运行状态 |
-| 运行监控 | `/runs/:id` | 查看状态/日志 | `GET /api/v1/runs/:id` | `workflow_service` | 实时状态与流式日志 |
-| KG可视化 | `/runs/:id` | 图谱交互 | `GET /api/v1/kg/sections/:id` | `kg_service` | 子图JSON数据 |
+| 教材生成 | `/` | 选择工作流→动态表单→创建 | `POST /api/v1/runs` | `TextbookWorkflow` | 教材内容、KG节点、运行状态 |
+| 问答生成 | `/` | 选择Quiz工作流→配置参数 | `POST /api/v1/runs` | `QuizMakerWorkflow` | 问答内容、格式化输出 |
+| 运行监控 | `/runs/:id` | 实时状态/EventSource流 | `GET /api/v1/runs/:id/stream` | `workflow_service` | 实时进度与流式日志 |
+| KG可视化 | `/runs/:id` | 图谱交互/节点展开 | `GET /api/v1/kg/books/:id` | `kg_service` | 整书图谱JSON数据 |
+| Prompt管理 | `/prompts` | 编辑/保存/验证Prompt | `PUT /api/v1/prompts/:id` | `prompt_service` | YAML模板文件 |
+| 知识库管理 | `/knowledge` | 文档上传/索引/RAG测试 | `POST /api/v1/rag/documents` | `rag_service` | 向量索引、检索结果 |
+| 工作流发现 | `/` | 动态工作流列表 | `GET /api/v1/workflows` | `WorkflowRegistry` | 工作流元数据+Schema |
 
 ### 3.2 端到端时序（示例）
 
@@ -307,23 +393,41 @@ sequenceDiagram
   participant U as User
   participant FE as Frontend
   participant API as FastAPI
+  participant REG as WorkflowRegistry
   participant WF as TextbookWorkflow
+  participant AGT as Multi-Agents
+  participant RAG as RAG Pipeline
   participant NEO as Neo4j
+  participant QDR as Qdrant
   participant LLM as LLM Providers
 
-  U->>FE: 输入主题并点击创建
-  FE->>API: POST /api/v1/runs {topic, language, chapter_count}
-  API->>WF: TextbookWorkflow.execute()
-  WF->>LLM: planner → researcher → writer → qa → kg_builder
-  WF->>NEO: 写入知识图谱节点和关系
+  U->>FE: 访问首页
+  FE->>API: GET /api/v1/workflows
+  API->>REG: list_workflows()
+  REG-->>API: 工作流元数据列表
+  API-->>FE: 动态工作流+Schema
+  FE-->>U: 工作流选择器+动态表单
+  
+  U->>FE: 选择Textbook工作流并配置参数
+  FE->>API: POST /api/v1/runs {topic, workflow_id, params}
+  API->>WF: TextbookWorkflow.execute(state)
+  WF->>AGT: planner → researcher → writer → validator → kg_builder
+  AGT->>LLM: 并发调用多Provider
+  AGT->>NEO: 构建知识图谱
+  WF->>AGT: book_graph → merger
+  AGT->>NEO: 整书级图谱合并
   WF-->>API: {final_content, section_ids, book_id}
   API-->>FE: 201 Created {id, status}
+  
   FE->>API: GET /api/v1/runs/:id/stream (EventSource)
-  API-->>FE: 实时进度更新
-  FE->>API: GET /api/v1/kg/sections/:id
-  API->>NEO: 查询子图数据
+  API-->>FE: 实时进度事件流
+  
+  U->>FE: 切换到KG标签页
+  FE->>API: GET /api/v1/kg/books/:book_id
+  API->>NEO: 查询整书图谱
   NEO-->>API: 节点和关系JSON
-  API-->>FE: KG Graph数据
+  API-->>FE: Cytoscape图数据
+  FE-->>U: 交互式知识图谱可视化
 ```
 
 ### 3.3 LangGraph 图 & 节点契约
@@ -515,10 +619,11 @@ sequenceDiagram
 
 ```python
 {
-  "writer": {"max_workers": 3},
-  "validator": {"max_rewrite_attempts": 2},
-  "kg_builder": {"max_workers": 2},
-  "qa_generator": {"max_workers": 2}
+  "writer": {"max_workers": 50, "timeout": 120, "retry_count": 3},
+  "validator": {"max_rewrite_attempts": 1, "pass_threshold": 7.0},
+  "kg_builder": {"max_workers": 50, "timeout": 120, "retry_count": 3},
+  "qa_generator": {"max_workers": 50, "timeout": 120, "retry_count": 3},
+  "researcher": {"max_workers": 50, "timeout": 120, "retry_count": 3}
 }
 ```
 
@@ -530,13 +635,52 @@ sequenceDiagram
 3. **优雅降级**：错误状态下跳过后续节点
 4. **错误恢复**：支持从断点继续执行（LangGraph checkpointer）
 
-### 3.4 RAG 管道（最小可用）
+### 3.4 RAG 管道（双通道架构）
 
-本项目主要专注于教材生成和知识图谱构建，暂未实现传统的RAG检索增强生成管道。
+本项目实现了完整的RAG检索增强生成管道，采用双通道并行检索架构。
 
-* **关键函数**：TBD - 未来可集成向量检索功能
+#### 3.4.1 RAG架构设计
 
-* **向量库**：TBD - 可考虑集成FAISS/Chroma/PgVector
+**核心组件**：
+- **DocumentChunker**: 文档分块处理（800字/块，120字重叠）
+- **Embedder**: API化嵌入服务（硅基流动等Provider）
+- **QdrantStore**: 向量数据库接口
+- **Neo4jKGQueries**: 知识图谱查询
+- **VectorRetriever**: 向量检索器（语义召回）
+- **KGRetriever**: KG检索器（结构关系）
+- **EvidenceMerger**: 证据智能合并重排
+- **BGEReranker**: API化重排器（可选）
+- **PromptBuilder**: RAG Prompt构造器
+
+#### 3.4.2 双通道检索流程
+
+```python
+async def dual_channel_retrieve(self, query: str) -> RAGResult:
+    # 1. 并行执行向量检索和KG检索
+    vector_task = self.vector_retriever.search(query, top_k=12)
+    kg_task = self.kg_retriever.search(query, top_k=8, hop=2)
+    
+    vector_hits, kg_hits = await asyncio.gather(vector_task, kg_task)
+    
+    # 2. 智能合并重排 (alpha=0.7向量权重, beta=0.3KG权重)
+    merged = self.evidence_merger.merge(vector_hits, kg_hits)
+    
+    # 3. 可选重排
+    if self.config.use_reranker:
+        reranked = self.reranker.rerank(query, merged, top_k=4)
+    
+    # 4. 构造RAG Prompt
+    prompt = self.prompt_builder.build(query, merged)
+    return RAGResult(vector_hits, kg_hits, merged, prompt)
+```
+
+#### 3.4.3 关键函数与接口
+
+* **文档索引**: `pipeline.index_documents()` - 支持PDF/TXT/MD等格式
+* **双通道检索**: `pipeline.retrieve()` - 统一检索入口  
+* **测试接口**: `pipeline.test_retrieval()` - RAG调试和评估
+* **向量库**: Qdrant - 高性能向量检索，支持余弦相似度
+* **图数据库**: Neo4j - 结构化关系检索，支持多跳查询
 
 ### 3.5 知识图谱（Neo4j）模型
 
@@ -693,6 +837,49 @@ RETURN properties(r) AS edge
   }
   ```
 
+### 4.2.1 工作流发现
+
+* **GET** `/api/v1/workflows`
+* **200 响应**：
+
+  ```json
+  [
+    {
+      "id": "textbook",
+      "name": "教材生成工作流",
+      "description": "智能生成结构化教材内容",
+      "version": "1.0.0",
+      "tags": ["教育", "内容生成"],
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "topic": {"type": "string", "title": "主题"},
+          "chapter_count": {"type": "integer", "minimum": 1, "maximum": 20}
+        },
+        "required": ["topic", "chapter_count"]
+      },
+      "ui_schema": {
+        "chapter_count": {"ui:widget": "range"}
+      }
+    }
+  ]
+  ```
+
+### 4.2.2 Prompt管理
+
+* **GET** `/api/v1/prompts` - 获取Prompt列表
+* **GET** `/api/v1/prompts/{prompt_id}` - 获取Prompt详情
+* **PUT** `/api/v1/prompts/{prompt_id}` - 更新Prompt内容
+* **POST** `/api/v1/prompts/validate` - 验证Prompt语法
+
+### 4.2.3 RAG管理
+
+* **POST** `/api/v1/rag/documents` - 上传并索引文档
+* **GET** `/api/v1/rag/documents` - 获取文档列表  
+* **DELETE** `/api/v1/rag/documents/{doc_name}` - 删除文档
+* **POST** `/api/v1/rag/reindex` - 重建向量索引
+* **POST** `/api/v1/rag/test` - RAG检索测试
+
 ### 4.3 流式监控
 
 * **GET** `/api/v1/runs/{run_id}/stream`
@@ -721,19 +908,31 @@ RETURN properties(r) AS edge
 
 | 路由 | 页面 | 权限 | 说明 |
 | ---- | ---- | ---- | ---- |
-| `/` | Home.vue | 无 | 创建新的教材生成运行 |
-| `/runs/:id` | RunDetail.vue | 无 | 查看运行状态和知识图谱 |
+| `/` | Home.vue | 无 | 工作流选择和动态表单创建 |
+| `/runs/:id` | RunDetail.vue | 无 | 运行详情、KG可视化、产物管理 |
+| `/prompts` | PromptStudio.vue | 无 | YAML Prompt编辑器和管理 |
+| `/knowledge` | KnowledgeBase.vue | 无 | 文档管理、RAG测试、知识库调试 |
 
 ### 5.2 组件树
 
 ```
-App.vue
+App.vue (现代化导航栏 + 路由容器)
 ├─ router-view
 │  ├─ Home.vue (/)
-│  │  └─ form (主题输入表单)
-│  └─ RunDetail.vue (/runs/:id)
-│     ├─ RunConsole.vue (运行日志显示)
-│     └─ KgGraph.vue (知识图谱可视化)
+│  │  ├─ 工作流选择器 (动态工作流卡片)
+│  │  └─ 动态表单 (基于JSON Schema)
+│  ├─ RunDetail.vue (/runs/:id)
+│  │  ├─ 标签页导航 (Overview/KG/Artifacts)
+│  │  ├─ RunConsole.vue (实时日志显示)
+│  │  └─ KgGraph.vue (Cytoscape知识图谱)
+│  ├─ PromptStudio.vue (/prompts)
+│  │  ├─ 三栏布局 (列表/编辑器/预览)
+│  │  ├─ YAML编辑器 (Monaco Editor)
+│  │  └─ 语法验证 (实时校验)
+│  └─ KnowledgeBase.vue (/knowledge)
+│     ├─ 文档管理面板 (上传/列表/删除)
+│     ├─ RAG调试面板 (检索测试)
+│     └─ 索引状态监控 (向量化进度)
 ```
 
 ### 5.3 交互流程（页面级时序）
@@ -773,11 +972,9 @@ sequenceDiagram
 **Pinia Store 结构 (`frontend/src/store/runs.ts`)：**
 ```typescript
 interface RunState {
-  status: RunStatus | null        // 当前运行状态
-  logs: string[]                  // 实时日志数组
-  currentRunId: string | null     // 当前运行ID
-  isStreaming: boolean           // 是否正在流式监听
-  error: string | null           // 错误信息
+  currentId: string | null       // 当前运行ID
+  status: RunStatus | null       // 当前运行状态
+  logs: string[]                 // 实时日志数组
 }
 
 interface RunStatus {
@@ -794,12 +991,9 @@ interface RunStatus {
 ```
 
 **核心 Actions：**
-- `createRun(payload)`: 创建新的教材生成运行
+- `createRun(payload)`: 创建新的教材生成运行并自动开启流式监听
 - `fetchStatus(runId)`: 获取运行状态
-- `watchStream(runId)`: 开启EventSource实时监听
-- `stopStream()`: 停止流式监听
-- `addLog(message)`: 添加日志信息
-- `clearLogs()`: 清空日志
+- `watchStream(runId)`: 开启EventSource实时监听，自动处理log和end事件
 
 **状态流转：**
 ```
@@ -914,26 +1108,68 @@ interface RunStatus {
   | APP_NEO4J__URI | bolt://neo4j:7687 | Neo4j连接URI |
   | APP_NEO4J__USER | neo4j | Neo4j用户名 |
   | APP_NEO4J__PASSWORD | test1234 | Neo4j密码 |
+  | APP_QDRANT__URL | http://qdrant:6333 | Qdrant向量数据库URL |
+  | APP_QDRANT__COLLECTION | kb_chunks | 向量集合名称 |
+  | APP_QDRANT__DISTANCE | cosine | 向量距离算法 |
   | APP_OUTPUT_DIR | /app/output | 运行产物输出目录 |
+  | APP_MIDDLEWARE__MAX_RETRIES | 3 | LLM调用最大重试次数 |
+  | APP_MIDDLEWARE__REQUESTS_PER_MINUTE | 60 | 限流配置 |
 * 多环境配置：支持 `APP_*` 前缀环境变量覆盖，嵌套使用 `__` 分隔符
+* Pydantic Settings：自动类型验证和配置分层管理
 
 ---
 
 ## 7. 数据与存储
 
-* 原始文档：运行产物存储在 `./output/<run_id>/` 目录，包含状态JSON、最终内容MD、KG section IDs
-* 向量库：暂未集成，可考虑未来添加向量检索功能
-* Neo4j：存储知识图谱节点和关系，按 `section_id` 和 `scope` 组织
-* 数据生命周期：运行创建→工作流执行→KG构建→产物落盘→可视化查询
+### 7.1 存储架构
+
+* **运行产物**: `./output/<run_id>/` 目录，包含状态JSON、最终内容MD、KG section IDs、ZIP打包
+* **向量数据库**: Qdrant存储文档块向量，支持余弦相似度检索，集合名 `kb_chunks`
+* **知识图谱**: Neo4j存储节点和关系，支持多Scope（section/book级别）组织
+* **知识库文档**: `./knowledge_base/` 目录，包含原始文档、分块数据、索引快照
+* **Prompt模板**: `domain/prompts/` YAML文件，支持Git版本控制和热更新
+* **配置文件**: 分层配置管理，支持环境变量覆盖和类型验证
+
+### 7.2 数据生命周期
+
+```
+创建运行 → 工作流执行 → 多智能体协作 → KG构建 → 
+向量索引 → 产物落盘 → 可视化查询 → 下载/分享
+```
+
+### 7.3 存储优化
+
+* **增量更新**: 支持文档增量索引和KG增量构建
+* **幂等性**: 基于content_hash的去重机制
+* **备份策略**: 自动快照和数据持久化
+* **查询优化**: 索引优化和分页查询
 
 ---
 
 ## 8. 测试、质量与可观测性
 
-* 测试矩阵：主要依赖手动测试，未配置自动化测试
-* 覆盖率阈值：TBD
-* 日志：结构化日志，支持进度跟踪和错误处理
-* 监控：EventSource 实时流、运行状态监控、Neo4j 连接状态
+### 8.1 测试策略
+
+* **单元测试**: 核心算法和工具函数的单元测试
+* **集成测试**: API端点和工作流的集成测试
+* **端到端测试**: 完整业务流程的E2E测试
+* **性能测试**: 并发处理和大文档处理的性能测试
+* **RAG评估**: 检索质量和准确性评估
+
+### 8.2 质量保证
+
+* **代码质量**: Python PEP8、TypeScript ESLint、自动格式化
+* **类型安全**: Pydantic模型验证、TypeScript严格类型检查
+* **错误处理**: 统一异常处理、优雅降级、错误恢复
+* **并发控制**: 动态并发调整、背压控制、超时处理
+
+### 8.3 可观测性
+
+* **结构化日志**: 分级日志、请求追踪、性能指标
+* **实时监控**: EventSource进度流、状态变更通知
+* **健康检查**: 服务健康检查、数据库连接状态
+* **性能监控**: 响应时间、资源使用、错误率统计
+* **业务指标**: 运行成功率、KG质量评分、用户满意度
 
 ---
 
@@ -962,8 +1198,8 @@ created → pending → running → succeeded/failed/cancelled
 - **取消权限**：当前仅支持系统级取消（异常终止），用户主动取消功能TBD
 - **产物保留**：取消后保留 `./output/<run_id>/` 下的所有已生成内容
 - **超时策略**：
-  - 节点级超时：`300s`（可配置 `_TIMEOUT` 环境变量）
-  - LLM调用超时：`300s`（middleware层控制）
+  - 节点级超时：`120s`（可配置 `WRITER_TIMEOUT` 等环境变量）
+  - LLM调用超时：`120s`（各智能体内部控制）
   - 超时后标记为`failed`，但支持从checkpointer恢复
 - **重入机制**：LangGraph支持checkpointer恢复，但当前实现为每次新建Run
 
@@ -1002,7 +1238,7 @@ class TextbookState(TypedDict, total=False):
     
     # 规划阶段输出
     outline: Optional[str]                       # 大纲文本
-    chapters: Optional[List[ChapterDict]]        # 结构化章节数据
+    chapters: Optional[List[Dict[str, Any]]]     # 结构化章节数据
     
     # 研究阶段输出
     research_content: Optional[Dict[str, str]]   # {子章节名: 研究内容}
@@ -1012,7 +1248,7 @@ class TextbookState(TypedDict, total=False):
     
     # 写作阶段输出
     content: Optional[Dict[str, str]]            # {子章节名: 正文内容}
-    validation_results: Optional[Dict[str, ValidationResult]]  # 验证结果
+    validation_results: Optional[Dict[str, Dict[str, Any]]]  # 验证结果
     
     # QA生成输出
     qa_results: Optional[Dict[str, Dict[str, Any]]]  # QA结构化数据
@@ -1020,14 +1256,24 @@ class TextbookState(TypedDict, total=False):
     qa_metadata: Optional[Dict[str, Any]]        # QA元数据
     
     # KG构建输出
-    knowledge_graphs: Optional[Dict[str, KgDict]]  # {子章节名: KG数据}
+    knowledge_graphs: Optional[Dict[str, Dict[str, Any]]]  # {子章节名: KG数据}
+    merged_knowledge_graph: Optional[Dict[str, Any]]       # 合并后的知识图谱
     section_ids: Optional[List[str]]             # 小节图谱ID列表
+    section_id: Optional[str]                    # 当前小节ID
     book_id: Optional[str]                       # 整本书图谱ID
+    book_store_stats: Optional[Dict[str, Any]]   # 整书存储统计
+    
+    # 跨智能体洞察
+    cross_agent_insights: Optional[Dict[str, Dict[str, Any]]]
     
     # 最终输出
     final_content: Optional[str]                 # Markdown格式完整教材
     
-    # 错误处理
+    # 统计信息
+    kg_store_stats: Optional[Dict[str, Any]]     # KG存储统计
+    processing_stats: Optional[Dict[str, Any]]   # 处理统计
+    
+    # 错误处理和配置
     error: Optional[str]                         # 错误信息
     config: Optional[Dict[str, Any]]             # 运行时配置
 ```
@@ -1039,18 +1285,34 @@ class TextbookState(TypedDict, total=False):
 {
   "writer": {
     "max_workers": 50,           # 并发数上限
-    "timeout": 300,              # 单节点超时(秒)
+    "timeout": 120,              # 单节点超时(秒)
     "retry_count": 3,            # LLM调用重试次数
     "chunk_size": 10             # 批处理大小
   },
   "validator": {
+    "max_workers": 50,
+    "timeout": 120,
+    "retry_count": 3,
     "max_rewrite_attempts": 1,   # 验证失败后重写次数
     "pass_threshold": 7.0        # 通过阈值(1-10分)
   },
   "kg_builder": {
     "max_workers": 50,
-    "timeout": 300,
-    "retry_count": 3
+    "timeout": 120,
+    "retry_count": 3,
+    "chunk_size": 10
+  },
+  "qa_generator": {
+    "max_workers": 50,
+    "timeout": 120, 
+    "retry_count": 3,
+    "chunk_size": 10
+  },
+  "researcher": {
+    "max_workers": 50,
+    "timeout": 120,
+    "retry_count": 3,
+    "chunk_size": 10
   }
 }
 ```
@@ -1182,37 +1444,37 @@ provider_fallback_matrix = {
 
 **概念Key规范化规则：**
 ```python
-def normalize_concept_key(concept: str) -> str:
-    """概念键标准化算法"""
-    # 1. 转换为小写
-    normalized = concept.lower()
-    
-    # 2. 移除标点和特殊字符
-    normalized = re.sub(r'[^\w\u4e00-\u9fa5]', '', normalized)
-    
-    # 3. 中文同义词映射
-    synonyms = {"机器学习": "ml", "深度学习": "dl", "人工智能": "ai"}
-    normalized = synonyms.get(normalized, normalized)
-    
-    # 4. 英文词形还原
-    normalized = lemmatize(normalized)  # 使用NLTK
-    
-    # 5. 生成哈希ID
-    return hashlib.md5(normalized.encode()).hexdigest()[:8]
+def slug(text: str) -> str:
+    """实际的文本规范化函数"""
+    cleaned = re.sub(r'[^\w\u4e00-\u9fff]+', '_', text)
+    return cleaned.strip('_').lower()
+
+def generate_concept_id(name: str, topic: str, chapter: str, subchapter: str) -> str:
+    """实际的概念ID生成算法"""
+    slug_name = slug(name)
+    content = f"{topic}|{chapter or ''}|{subchapter or ''}"
+    hash_suffix = hashlib.md5(content.encode('utf-8')).hexdigest()[:6]
+    return f"concept:{slug_name}:{hash_suffix}"
+
+def generate_content_hash(content: str) -> str:
+    """内容哈希生成（用于去重）"""
+    normalized = re.sub(r'\s+', ' ', content.strip())
+    return hashlib.md5(normalized.encode('utf-8')).hexdigest()[:12]
 ```
 
 ### 关系类型枚举与语义
 
 **标准关系类型定义：**
 ```python
-class RelationType(Enum):
-    RELATES_TO = "relates_to"      # 一般关联：概念间的通用连接
-    PART_OF = "part_of"           # 包含关系：A是B的组成部分
-    REQUIRES = "requires"          # 依赖关系：A需要先掌握B
-    CONTRASTS_WITH = "contrasts_with"  # 对比关系：A与B形成对比
-    IMPLEMENTS = "implements"      # 实现关系：A实现了B
-    EXTENDS = "extends"           # 扩展关系：A扩展了B
-    SIMILAR_TO = "similar_to"     # 相似关系：A与B相似
+# 实际实现中的关系类型（基于LLM生成）
+class RelationType:
+    MENTIONS = "MENTIONS"          # 默认关系类型：在文本中提及
+    RELATES_TO = "RELATES_TO"      # 一般关联：概念间的通用连接
+    PART_OF = "PART_OF"           # 包含关系：A是B的组成部分
+    REQUIRES = "REQUIRES"          # 依赖关系：A需要先掌握B
+    IMPLEMENTS = "IMPLEMENTS"      # 实现关系：A实现了B
+    EXTENDS = "EXTENDS"           # 扩展关系：A扩展了B
+    # 注：实际关系类型由LLM动态生成，上述为常见类型
 ```
 
 **关系属性规范：**
@@ -1234,10 +1496,10 @@ class RelationType(Enum):
 
 **RID构造公式：**
 ```python
-def generate_rid(source_id: str, target_id: str, relation_type: str, scope: str, content_hash: str) -> str:
-    """生成关系唯一标识符"""
-    payload = f"{source_id}|{target_id}|{relation_type}|{scope}|{content_hash}"
-    return hashlib.sha256(payload.encode()).hexdigest()[:16]
+def generate_relation_rid(edge_type: str, source_id: str, target_id: str, scope: str) -> str:
+    """实际的关系唯一标识符生成算法"""
+    raw = f"{edge_type}|{source_id}|{target_id}|{scope}"
+    return hashlib.md5(raw.encode("utf-8")).hexdigest()[:16]
 ```
 
 **冲突解决规则：**
@@ -1262,17 +1524,16 @@ kg_query_limits = {
 }
 ```
 
-**分页查询接口：**
+**实际API接口：**
 ```python
-GET /api/v1/kg/sections/{section_id}?limit=100&offset=0&node_types=concept,chapter
-GET /api/v1/kg/books/{book_id}?limit=100&offset=0&depth=2
+GET /api/v1/kg/sections/{section_id}  # 获取小节知识图谱
+GET /api/v1/kg/books/{book_id}        # 获取整本书知识图谱
 ```
 
-**过滤条件支持：**
-- `node_types`: 按节点类型过滤（concept, chapter, subchapter）
-- `relation_types`: 按关系类型过滤  
-- `weight_threshold`: 按关系权重过滤
-- `depth`: 图遍历深度限制
+**当前实现特点：**
+- 简化设计：直接返回完整图谱数据，无分页机制
+- 前端负责：大图谱的性能优化由前端Cytoscape处理
+- 未来扩展：可根据需要添加查询参数和过滤条件
 
 ### 增量加载协议
 
@@ -1307,23 +1568,23 @@ interface KgLoadingStrategy {
 
 ### 章节级并发限制
 
-**动态降档策略：**
+**实际并发控制实现：**
 ```python
-class ConcurrencyController:
-    def __init__(self):
-        self.base_workers = 50
-        self.min_workers = 5
-        self.failure_threshold = 5
-        self.current_workers = self.base_workers
-        
-    def handle_failure(self, error_type: str):
-        if error_type == "rate_limit":
-            # 429限流 → 减半并发 + 增加间隔
-            self.current_workers = max(self.min_workers, self.current_workers // 2)
-            self.request_interval *= 2
-        elif error_type == "timeout": 
-            # 超时 → 减少并发
-            self.current_workers = max(self.min_workers, self.current_workers - 10)
+def get_concurrency_config(high_performance: bool = False) -> Dict:
+    """获取并发配置，支持高性能模式"""
+    base = _build_base_config()
+    if high_performance:
+        # 高性能模式：翻倍并发数和超时时间
+        for k in ("writer", "qa_generator", "kg_builder", "researcher", "validator"):
+            base[k]["max_workers"] = max(base[k]["max_workers"], 100)
+            base[k]["timeout"] = max(base[k]["timeout"], 600)
+    return base
+
+# 实际使用方式（在各节点中）
+concurrency_config = get_concurrency_config()
+max_workers = concurrency_config["writer"]["max_workers"]
+with ThreadPoolExecutor(max_workers=max_workers) as executor:
+    # 并发处理逻辑
 ```
 
 ### 写作-验证闭环配置
@@ -1376,87 +1637,82 @@ interface ErrorData {
 }
 ```
 
-**前端事件处理：**
+**前端事件处理（实际实现）：**
 ```typescript
-const eventSource = new EventSource(`/api/v1/runs/${runId}/stream`)
-
-eventSource.addEventListener('log', (e) => {
-  runsStore.addLog(e.data)
-})
-
-eventSource.addEventListener('progress', (e) => {
-  const progress = JSON.parse(e.data)
-  runsStore.updateProgress(progress.node, progress.percent)
-})
-
-eventSource.addEventListener('error', (e) => {
-  const error = JSON.parse(e.data)
-  runsStore.setError(error.message)
-})
+// 在 frontend/src/store/runs.ts 中
+watchStream(id: string) {
+  const es = openRunStream(id)
+  es.addEventListener('log', (e: MessageEvent) => {
+    this.logs.push((e as MessageEvent).data)  // 直接添加日志文本
+  })
+  es.addEventListener('end', () => {
+    es.close()  // 流结束时关闭连接
+  })
+}
 ```
+
+**实际事件类型**：
+- `log`: 普通日志消息
+- `end`: 流结束信号
+- 无复杂的progress和error事件处理
 
 ### Graph操作事件映射
 
-**KgGraph.vue交互映射：**
+**KgGraph.vue实际交互功能：**
 ```typescript
 interface GraphInteraction {
-  // 节点点击 → 详情查询
-  'node:click': (nodeId: string) => {
-    // API调用: GET /api/v1/kg/nodes/{nodeId}/details
-    showNodeDetails(nodeId)
+  // 节点点击 → 控制台输出
+  'node:tap': (nodeData) => {
+    console.log('Node clicked:', nodeData)
   },
   
-  // 边点击 → 关系详情  
-  'edge:click': (edgeId: string) => {
-    // API调用: GET /api/v1/kg/edges/{edgeId}/details
-    showEdgeDetails(edgeId)
+  // 边点击 → 控制台输出
+  'edge:tap': (edgeData) => {
+    console.log('Edge clicked:', edgeData)
   },
   
-  // 框选 → 批量操作
-  'nodes:select': (nodeIds: string[]) => {
-    // API调用: POST /api/v1/kg/subgraph with nodeIds
-    highlightSubgraph(nodeIds)
+  // 刷新图谱
+  'refreshGraph': () => {
+    loadGraph()  // 重新加载图谱数据
   },
   
-  // 搜索 → 过滤显示
-  'graph:search': (query: string) => {
-    // API调用: GET /api/v1/kg/search?q={query}
-    filterBySearch(query)
+  // 重置布局
+  'resetLayout': () => {
+    cy.layout({ name: 'cola' }).run()  // 使用cola布局算法
   }
 }
 ```
+
+**注意**：当前实现为简化版本，节点和边的点击事件仅输出到控制台，未实现详情查询API
 
 ### 路由参数与深链
 
-**深链接URL格式：**
-```
-/runs/:id?view=book&scope=book:xxx&node=node123&tab=content
-```
-
-**参数解析规则：**
+**实际路由配置：**
 ```typescript
-interface RouteParams {
-  id: string                    // 必需：运行ID
-  view?: 'section' | 'book'    // 可选：视图模式，默认'book'
-  scope?: string               // 可选：图谱范围ID
-  node?: string                // 可选：高亮节点ID
-  tab?: 'content' | 'kg' | 'qa' // 可选：标签页，默认'content'
-}
-
-// 页面初始化状态还原
-function restoreStateFromRoute(params: RouteParams) {
-  if (params.scope) {
-    await loadKgGraph(params.scope)
-  }
-  if (params.node) {
-    highlightNode(params.node)
-    centerViewOnNode(params.node)
-  }
-  if (params.tab) {
-    switchToTab(params.tab)
-  }
-}
+const routes: Array<RouteRecordRaw> = [
+  { path: '/', name: 'home', component: Home },
+  { path: '/runs/:id', name: 'run-detail', component: RunDetail, props: true },
+  { path: '/prompts', name: 'prompt-studio', component: PromptStudio },
+  { path: '/knowledge', name: 'knowledge-base', component: KnowledgeBase }
+]
 ```
+
+**简化参数处理：**
+```typescript
+// 在 RunDetail.vue 中
+const route = useRoute()
+const id = computed(() => route.params.id as string)
+const activeTab = ref('overview')  // 本地状态管理，无URL同步
+
+// 标签页切换（无深链接支持）
+const tabs = [
+  { id: 'overview', label: '概览' },
+  { id: 'kg', label: '知识图谱' },
+  { id: 'artifacts', label: '产物' }
+]
+```
+
+**注意**：当前路由实现较为简单，未支持查询参数和状态还原功能
 
 ---
 
@@ -1464,233 +1720,206 @@ function restoreStateFromRoute(params: RouteParams) {
 
 ### 输入验证规则
 
-**RunCreate Schema约束：**
+**RunCreate Schema约束（实际实现）：**
 ```python
 class RunCreate(BaseModel):
-    topic: str = Field(
-        ..., 
-        min_length=2, 
-        max_length=200, 
-        description="教材主题",
-        regex=r"^[\u4e00-\u9fa5a-zA-Z0-9\s\-_]+$"  # 中英文数字空格连字符下划线
-    )
-    language: str = Field(
-        "中文", 
-        regex=r"^(中文|English|Français|Deutsch|日本語)$",
-        description="生成语言"
-    )
-    chapter_count: int = Field(
-        ge=1, 
-        le=20, 
-        description="章节数"
-    )
+    topic: str = Field(..., description="主题或任务描述")
+    language: str = Field("中文", description="生成语言")
+    chapter_count: int = Field(8, ge=1, le=20, description="章节数（教材工作流适用）")
+    workflow_id: str = Field("textbook", description="工作流ID，默认为textbook以保持向后兼容")
+    workflow_params: Optional[Dict[str, Any]] = Field(None, description="工作流特定参数")
 ```
 
-**长度限制配置：**
+**实际验证规则**：
+- `topic`: 必填字符串，无长度和格式限制
+- `language`: 默认"中文"，无枚举限制
+- `chapter_count`: 1-20之间的整数，默认8
+- `workflow_id`: 默认"textbook"，支持多工作流
+- `workflow_params`: 可选的工作流参数字典
+
+**实际的长度限制配置：**
 ```python
-content_budget = {
-    "max_subchapter_tokens": 2000,    # 单个子章节最大token数
-    "max_book_tokens": 50000,         # 整本书最大token数  
-    "max_outline_length": 5000,       # 大纲最大字符数
-    "max_qa_pairs_per_section": 8,    # 每小节QA对数量上限
+# 来自 prompt_bindings.yaml 的实际 max_tokens 配置
+model_limits = {
+    "planner": 2000,       # 规划器最大token数
+    "researcher": 1500,    # 研究器最大token数  
+    "writer": 2500,        # 写作器最大token数
+    "validator": 1500,     # 验证器最大token数
+    "qa_generator": 2000,  # QA生成器最大token数
+    "kg_builder": 2000,    # KG构建器最大token数
 }
 
-# 超限处理策略
-overflow_strategy = {
-    "subchapter_overflow": "truncate_and_warn",  # 截断并警告
-    "book_overflow": "split_into_volumes",       # 分卷处理
-    "outline_overflow": "compress_descriptions"   # 压缩描述
+# RAG配置的实际限制
+rag_limits = {
+    "chunk_size": 800,            # 文档分块大小
+    "chunk_overlap": 120,         # 分块重叠
+    "max_context_length": 4000,   # 最大上下文长度
+    "vector_top_k": 12,           # 向量检索数量
+    "final_top_k": 4              # 最终结果数量
 }
 ```
 
-### 错误码与提示文案
+### 实际错误处理
 
-**输入验证错误码：**
+**简化的错误处理：**
 ```python
-validation_errors = {
-    "TOPIC_TOO_SHORT": {"code": 4001, "message": "主题长度不能少于2个字符"},
-    "TOPIC_TOO_LONG": {"code": 4002, "message": "主题长度不能超过200个字符"},
-    "INVALID_LANGUAGE": {"code": 4003, "message": "不支持的语言类型"},
-    "CHAPTER_COUNT_OUT_OF_RANGE": {"code": 4004, "message": "章节数必须在1-20之间"},
-    "CONTENT_TOO_LONG": {"code": 4005, "message": "内容超出长度限制，建议分卷处理"},
-}
+# 实际上没有复杂的错误码系统，主要依赖Pydantic验证
+class RunCreate(BaseModel):
+    topic: str = Field(..., description="主题或任务描述")
+    chapter_count: int = Field(8, ge=1, le=20, description="章节数（教材工作流适用）")
+    # 验证失败时FastAPI自动返回422 Unprocessable Entity
 ```
 
 ---
 
 ## 8.9 质量与安全控制
 
-### 内容质量门槛
+### 内容质量门槛（实际实现）
 
-**验证维度权重：**
+**Validator实际验证维度：**
 ```python
-quality_metrics = {
-    "content_completeness": {      # 内容完整性
-        "weight": 0.3,
-        "criteria": ["大纲覆盖率", "关键词包含率", "章节结构完整性"],
-        "min_score": 7.0
-    },
-    "technical_accuracy": {        # 技术准确性  
-        "weight": 0.4,
-        "criteria": ["概念正确性", "实例有效性", "技术深度"],
-        "min_score": 8.0
-    },
-    "logical_coherence": {         # 逻辑连贯性
-        "weight": 0.2, 
-        "criteria": ["章节间逻辑", "论述连贯性", "结构合理性"],
-        "min_score": 6.0
-    },
-    "language_expression": {       # 语言表达
-        "weight": 0.1,
-        "criteria": ["语言流畅性", "表达清晰度", "术语准确性"], 
-        "min_score": 6.0
-    }
-}
+class Validator:
+    def __init__(self, provider: str = "siliconflow", pass_threshold: float | None = None):
+        self.pass_threshold = pass_threshold  # 默认7.0
+        
+    # 实际的验证提示要求四个维度
+    validation_prompt = """
+    请从以下四个方面进行严格验证：
+    1. 内容完整性（是否覆盖大纲要求）
+    2. 技术准确性（概念是否正确）
+    3. 逻辑连贯性（章节间是否连贯）
+    4. 语言表达（是否清晰易懂）
+    
+    对每个方面进行评分（1-10分），并给出具体的改进建议。
+    """
 ```
 
-**自动修订规则：**
+**实际的分数处理：**
 ```python
-auto_revision_rules = {
-    "score_below_5": "强制重写",
-    "score_5_to_7": "针对性修订",
-    "missing_keywords": "补充关键词解释",
-    "logical_gaps": "增加过渡段落",
-    "grammar_errors": "语法自动修正"
-}
+def _extract_score_from_report(self, report: str, pass_threshold: float = 7.0):
+    # 提取总体评分（X/10格式）
+    score_patterns = [
+        r"(?:总体评分|总评分|评分)\s*[:：]?\s*(\d+(?:\.\d+)?)\s*/\s*10",
+        r"(\d+(?:\.\d+)?)[\s]*\/[\s]*10",
+    ]
+    # 默认分数5.0，阈值7.0
+    is_passed = score >= pass_threshold
 ```
 
-### 引用/出处策略
-
-**引用字段规范：**
+**简化的修订规则：**
 ```python
-class ReferenceSchema(BaseModel):
-    title: str                    # 引用标题
-    authors: List[str]            # 作者列表
-    source_type: str             # 类型：book/paper/website/course
-    publication_year: Optional[int] # 发表年份
-    url: Optional[str]           # 在线链接
-    accessed_date: Optional[str] # 访问日期
-    credibility_score: float     # 可信度评分(0-1)
+# 实际处理逻辑很简单
+if not validation_result["is_passed"]:
+    state["needs_rewrite"] = True
+    state["rewrite_suggestions"] = validation_result["rewrite_suggestions"]
+else:
+    state["needs_rewrite"] = False
 ```
 
-**引用要求：**
-- 每个子章节最少2条引用
-- 引用可信度评分≥0.7
-- 支持常见引用格式（APA、IEEE、GB/T 7714）
+### RAG写作增强策略
+
+**实际实现的增强功能：**
+```python
+def _enhance_writing_with_rag(self, topic: str, subchapter_title: str, 
+                              subchapter_keywords: List[str], research_summary: str) -> str:
+    """使用RAG增强写作内容"""
+    # 构建查询：结合主题、子章节标题和关键词
+    query_parts = [topic, subchapter_title]
+    if subchapter_keywords:
+        query_parts.extend(subchapter_keywords[:3])  # 只取前3个关键词
+    query = " ".join(query_parts)
+    
+    # 获取增强的材料
+    evidence = rag_service.retrieve_evidence(
+        query=query, top_k=3, include_kg=True
+    )
+    
+    # 构建参考材料文本
+    reference_materials = []
+    for i, ev in enumerate(evidence["evidence"], 1):
+        content_preview = ev["content"][:300] + "..."
+        reference_materials.append(f"[{i}] {content_preview}")
+    
+    return f"\n\n## 写作参考材料\n" + "\n\n".join(reference_materials)
+```
+
+**注意**：目前未实现正式的引用管理系统，参考材料以RAG检索结果形式提供
 
 ---
 
 ## 8.10 示例与种子数据
 
-### 最小可复现样本
+### 实际测试样本
 
-**Golden Path测试用例：**
+**项目中的简单测试用例：**
 ```json
-{
-  "input": {
-    "topic": "Python基础编程",
-    "language": "中文", 
-    "chapter_count": 3
-  },
-  "expected_output": {
-    "chapters": 3,
-    "subchapters": 8,
-    "total_tokens": 15000,
-    "section_ids": ["section_001", "section_002", "section_003"],
-    "book_id": "book:python_basics:12345678",
-    "kg_nodes": 25,
-    "kg_edges": 40
-  },
-  "execution_time": "< 180s",
-  "success_criteria": [
-    "所有子章节验证通过",
-    "KG图谱完整构建", 
-    "最终内容生成成功"
-  ]
-}
+// backend/test.json
+{"workflow_id": "textbook", "workflow_params": {"topic": "测试"}}
+
+// backend/test_run.json  
+{"workflow_id": "textbook", "workflow_params": {"topic": "测试API负载均衡"}}
 ```
 
-### 失败案例对照
+**实际运行验证：**
+```bash
+# 测试教材工作流
+curl -X POST http://localhost:8000/api/v1/runs \
+  -H "Content-Type: application/json" \
+  -d '{"topic": "Python基础", "chapter_count": 3}'
 
-**典型错误输入：**
-```json
-{
-  "invalid_inputs": [
-    {
-      "case": "主题过短",
-      "input": {"topic": "AI", "chapter_count": 5},
-      "expected_error": "TOPIC_TOO_SHORT",
-      "expected_behavior": "返回400错误，提示增加主题描述"
-    },
-    {
-      "case": "章节数超限", 
-      "input": {"topic": "深度学习完整教程", "chapter_count": 25},
-      "expected_error": "CHAPTER_COUNT_OUT_OF_RANGE", 
-      "expected_behavior": "返回400错误，建议分册处理"
-    },
-    {
-      "case": "LLM API故障",
-      "input": {"topic": "机器学习", "chapter_count": 3},
-      "expected_behavior": "重试3次后降级，生成占位内容"
-    }
-  ]
-}
+# 测试Quiz工作流
+curl -X POST http://localhost:8000/api/v1/runs \
+  -H "Content-Type: application/json" \
+  -d '{"workflow_id": "quiz_maker", "topic": "算法基础"}'
 ```
+
+**实际错误处理：**
+- **章节数超限**: Pydantic自动验证，返回422 Unprocessable Entity
+- **LLM API故障**: 记录日志，返回错误信息，无自动重试机制
+- **主题为空**: Pydantic自动验证，返回422错误
+- **无效workflow_id**: 返回400 Bad Request
 
 ---
 
 ## 8.11 配置矩阵与特性开关
 
-### 节点级参数表
+### 实际配置参数
 
-**运行时配置继承优先级：**
+**配置优先级（实际实现）：**
 ```
-Run级配置 > 环境变量 > 默认配置
+环境变量 > 默认配置
 ```
 
-**参数配置示例：**
+**实际可配置参数：**
 ```python
-run_level_config = {
-  "concurrency": {
-    "writer_max_workers": 10,        # 覆盖默认50
-    "validator_pass_threshold": 8.0  # 覆盖默认7.0
-  },
-  "llm_params": {
-    "temperature": 0.3,              # 覆盖默认0.7
-    "max_tokens": 1500              # 覆盖默认2000
-  },
-  "content_limits": {
-    "max_subchapter_tokens": 1200   # 覆盖默认2000
-  }
-}
+# 基础配置
+APP_USE_REAL_WORKFLOW=true      # 是否使用真实工作流
+APP_DEBUG=true                  # 调试模式
+APP_OUTPUT_DIR=/app/output      # 输出目录
+
+# 并发配置
+WRITER_MAX_WORKERS=50          # 写作器并发数
+VALIDATOR_PASS_THRESHOLD=7.0   # 验证通过阈值
+GLOBAL_MAX_WORKERS=200         # 全局最大worker数
+
+# RAG配置
+APP_RAG__USE_RERANKER=false    # 是否使用重排器
+APP_RAG__ALPHA=0.7             # 向量检索权重
+APP_RAG__BETA=0.3              # KG检索权重
 ```
 
-### 特性开关(Feature Flags)
-
-**功能开关配置：**
+**实际特性控制（非Feature Flags系统）：**
 ```python
-feature_flags = {
-    "enable_qa_generation": True,          # 是否生成QA内容
-    "enable_book_graph": True,             # 是否构建整书图谱(B1)
-    "enable_cross_chapter_merge": False,   # 是否启用跨章节概念合并
-    "enable_content_validation": True,     # 是否启用内容验证
-    "enable_auto_retry": True,            # 是否启用自动重试
-    "enable_fallback_content": True,      # 是否启用兜底内容生成
-    "enable_incremental_kg": False,       # 是否启用增量KG构建
-    "enable_realtime_stream": True        # 是否启用实时事件流
-}
+# 在 AppSettings 中的简单配置项
+class AppSettings(BaseSettings):
+    use_real_workflow: bool = True  # 控制是否使用真实工作流
+    debug: bool = True              # 调试模式
+    
+class RAGSettings(BaseModel):
+    use_reranker: bool = False      # 控制是否使用重排器
 ```
 
-**环境级特性控制：**
-```bash
-# 开发环境：启用调试特性
-APP_FEATURE_FLAGS__DEBUG_MODE=true
-APP_FEATURE_FLAGS__VERBOSE_LOGGING=true
-
-# 生产环境：禁用实验特性  
-APP_FEATURE_FLAGS__EXPERIMENTAL_FEATURES=false
-APP_FEATURE_FLAGS__ENABLE_TELEMETRY=true
-```
+**注意**：项目没有实现复杂的Feature Flags系统，只有基本的配置参数
 
 ---
 
@@ -1698,8 +1927,32 @@ APP_FEATURE_FLAGS__ENABLE_TELEMETRY=true
 
 | 症状 | 可能原因 | 定位方法 | 解决步骤 |
 | ---- | -------- | -------- | -------- |
-| Docker Compose 启动失败 | 端口占用/Neo4j连接失败 | `docker compose logs` | 修改端口/检查Neo4j配置 |
-| 工作流执行失败 | LLM API密钥错误 | 查看后端日志 | 校验 `.env` 中 API 密钥 |
-| 前端无法访问后端 | CORS/网络问题 | 浏览器控制台 | 检查 CORS 配置/网络连通 |
+| Docker Compose 启动失败 | 端口占用/数据库连接失败 | `docker compose logs` | 修改端口/检查数据库配置 |
+| 工作流执行失败 | LLM API密钥错误/配额不足 | 查看后端日志/EventSource流 | 校验API密钥/检查配额 |
+| 前端无法访问后端 | CORS/代理配置问题 | 浏览器开发者工具 | 检查CORS设置/代理配置 |
+| RAG检索无结果 | 文档未索引/向量库未初始化 | 知识库管理页面 | 重新索引文档/检查Qdrant连接 |
+| KG图谱显示空白 | Neo4j连接失败/数据不存在 | Neo4j Web Console | 检查连接/验证图谱数据 |
+| Prompt编辑器加载失败 | YAML文件损坏/路径错误 | 后端日志/文件权限 | 修复YAML语法/检查文件路径 |
+| 工作流注册失败 | 模块导入错误/Schema验证失败 | Python错误堆栈 | 检查模块结构/修复Schema |
+| EventSource连接中断 | 网络超时/服务器重启 | 网络工具/服务状态 | 重新连接/重启服务 |
+
+### 9.1 快速诊断命令
+
+```bash
+# 检查服务状态
+docker compose ps
+docker compose logs backend
+docker compose logs neo4j
+docker compose logs qdrant
+
+# 健康检查
+curl http://localhost:8000/api/v1/runs/health
+curl -u neo4j:test1234 http://localhost:7474/db/neo4j/tx/commit
+curl http://localhost:6333/collections
+
+# 清理重启
+docker compose down -v
+docker compose up -d --build
+```
 
 ---

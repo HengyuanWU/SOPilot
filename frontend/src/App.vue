@@ -6,6 +6,7 @@
         <h1 class="nav-title">SOPilot</h1>
         <div class="nav-links">
           <router-link to="/" class="nav-link">首页</router-link>
+          <router-link to="/knowledge" class="nav-link">知识库</router-link>
           <router-link to="/prompts" class="nav-link">Prompt Studio</router-link>
         </div>
       </div>

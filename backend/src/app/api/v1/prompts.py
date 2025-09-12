@@ -88,7 +88,7 @@ class GitCommit(BaseModel):
     short_hash: str
 
 
-@router.get("/", response_model=List[PromptMetadata])
+@router.get("", response_model=List[PromptMetadata])
 async def list_prompts():
     """
     List all available prompts with metadata.
@@ -204,7 +204,7 @@ async def validate_prompt(request: PromptValidationRequest):
         raise HTTPException(status_code=500, detail=f"Failed to validate prompt: {str(e)}")
 
 
-@router.get("/bindings/")
+@router.get("/bindings")
 async def get_prompt_bindings():
     """
     Get current prompt bindings configuration.
@@ -221,7 +221,7 @@ async def get_prompt_bindings():
         raise HTTPException(status_code=500, detail=f"Failed to get bindings: {str(e)}")
 
 
-@router.put("/bindings/")
+@router.put("/bindings")
 async def update_prompt_bindings(
     bindings_update: PromptBindingsUpdate,
     commit_message: str = Query(default="Update prompt bindings", description="Git commit message")
@@ -282,7 +282,7 @@ async def get_prompt_history(
         raise HTTPException(status_code=500, detail=f"Failed to get history: {str(e)}")
 
 
-@router.post("/rollback/")
+@router.post("/rollback")
 async def rollback_prompt(
     path: str = Body(..., description="Relative path to the prompt file"),
     commit_hash: str = Body(..., description="Git commit hash to rollback to"),
@@ -322,7 +322,7 @@ async def rollback_prompt(
         raise HTTPException(status_code=500, detail=f"Failed to rollback: {str(e)}")
 
 
-@router.post("/clear-cache/")
+@router.post("/clear-cache")
 async def clear_prompt_cache():
     """
     Clear all prompt caches.

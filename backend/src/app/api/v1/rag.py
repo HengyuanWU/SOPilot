@@ -29,10 +29,10 @@ router = APIRouter(prefix="/rag", tags=["RAG"])
 # Pydantic 模型
 class DocumentInfo(BaseModel):
     """文档信息"""
-    filename: str
+    name: str  # 前端使用name字段
     size: int
     created_at: str
-    modified_at: str
+    updated_at: str  # 前端使用updated_at字段
     indexed: bool
     chunk_count: Optional[int] = None
 
@@ -150,10 +150,10 @@ async def list_documents(rag_pipeline: RAGPipeline = Depends(get_rag_pipeline)):
                     indexed_count += 1
                 
                 doc_info = DocumentInfo(
-                    filename=file_path.name,
+                    name=file_path.name,
                     size=stat.st_size,
                     created_at=datetime.fromtimestamp(stat.st_ctime).isoformat(),
-                    modified_at=datetime.fromtimestamp(stat.st_mtime).isoformat(),
+                    updated_at=datetime.fromtimestamp(stat.st_mtime).isoformat(),
                     indexed=indexed,
                     chunk_count=None  # TODO: 从JSONL文件读取块数量
                 )
