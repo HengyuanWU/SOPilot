@@ -42,7 +42,7 @@ class RAGConfig:
     chunk_overlap: int = 120
     
     # 嵌入配置（基于API调用）
-    embed_model: str = "BAAI/bge-small-zh-v1.5"
+    embed_model: str = "BAAI/bge-m3"  # SiliconFlow支持的embedding模型
     embed_provider: str = "siliconflow"  # 嵌入模型提供商
     
     # Qdrant配置
@@ -419,20 +419,20 @@ class RAGPipeline:
             top_k: 结果数量
             
         Returns:
-            Dict[str, Any]: 测试结果
+            Dict[str, Any]: 测试结果（符合前端期望的格式）
         """
         try:
             results = self.vector_retriever.search(query=query, top_k=top_k)
             
+            # 返回前端期望的格式
             return {
                 "query": query,
-                "results_count": len(results),
-                "results": [
+                "vector_hits": [
                     {
-                        "chunk_id": r.chunk_id,
-                        "doc_id": r.doc_id,
                         "score": r.score,
-                        "content_preview": r.text[:200] + "..." if len(r.text) > 200 else r.text,
+                        "doc": r.doc_id,
+                        "chunk": r.text[:200] + "..." if len(r.text) > 200 else r.text,
+                        "chunk_id": r.chunk_id,
                         "meta": r.meta,
                     }
                     for r in results
@@ -454,7 +454,7 @@ class RAGPipeline:
             top_k: 结果数量
             
         Returns:
-            Dict[str, Any]: 测试结果
+            Dict[str, Any]: 测试结果（符合前端期望的格式）
         """
         try:
             results = self.kg_retriever.search(
@@ -464,15 +464,15 @@ class RAGPipeline:
                 rel_types=self.config.kg_rel_types
             )
             
+            # 返回前端期望的格式
             return {
                 "query": query,
                 "hop": hop,
-                "results_count": len(results),
-                "results": [
+                "kg_hits": [
                     {
-                        "type": r.type,
                         "score": r.score,
-                        "content": r.content,
+                        "path": r.content,  # 前端显示为path
+                        "type": r.type,
                         "explanation": r.explanation,
                         "data": r.data,
                     }

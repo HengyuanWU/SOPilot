@@ -50,8 +50,8 @@ def get_metadata():
                     "type": "string", 
                     "title": "目标受众",
                     "description": "教材的目标读者群体",
-                    "enum": ["初学者", "中级", "高级", "专业人士"],
-                    "default": "初学者"
+                    "enum": ["初学", "中级", "高级", "专业"],
+                    "default": "初学"
                 },
                 "language": {
                     "type": "string",
@@ -64,7 +64,7 @@ def get_metadata():
                     "type": "integer",
                     "title": "章节数量",
                     "description": "期望生成的章节数量",
-                    "minimum": 3,
+                    "minimum": 1,
                     "maximum": 15,
                     "default": 3
                 },

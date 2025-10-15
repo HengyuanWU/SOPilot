@@ -66,15 +66,14 @@ class Neo4jClient:
                 }.get(str(node_type).lower(), ":Node")
                 cypher = f"""
                 MERGE (n{labels} {{id: $id}})
-                SET n += $properties
-                SET n.updated_at = datetime()
+                SET n += $properties,
+                    n.updated_at = datetime()
+                ON CREATE SET n.created_at = datetime()
                 RETURN n.id as node_id
                 """
                 props = dict(node)
-                if "created_at" not in props:
-                    from datetime import datetime as _dt
-
-                    props["created_at"] = _dt.utcnow().isoformat()
+                # 移除created_at，让Neo4j自己生成
+                props.pop("created_at", None)
                 _ = session.run(cypher, {"id": node["id"], "properties": props}).single()
                 return True
         except Exception as e:  # noqa: BLE001
@@ -91,20 +90,41 @@ class Neo4jClient:
                 
                 # 使用rid做唯一匹配（如果提供了rid）
                 rid = edge.get("rid")
+                # 准备属性字典（确保source_id/target_id在其中）
+                props = dict(edge)
+                if edge_type_raw:
+                    props["type_label"] = edge_type_raw
+                if "id" not in props:
+                    props["id"] = f"{edge_type}:{edge.get('source_id')}->{edge.get('target_id')}"
+                # 移除created_at，让Neo4j自己生成
+                props.pop("created_at", None)
+                
+                # 确保source_id和target_id在properties中
+                props["source_id"] = edge["source_id"]
+                props["target_id"] = edge["target_id"]
+                
                 if rid:
                     cypher = f"""
                     MATCH (source {{id: $source_id}})
                     MATCH (target {{id: $target_id}})
-                    MERGE (source)-[r:{edge_type} {{rid: $rid}}]->(target)
-                    SET r += $properties
-                    SET r.updated_at = datetime()
+                    MERGE (source)-[r:{edge_type}]->(target)
+                    ON CREATE SET r.rid = $rid,
+                                  r.source_id = $source_id,
+                                  r.target_id = $target_id,
+                                  r += $properties,
+                                  r.created_at = datetime()
+                    ON MATCH SET r.rid = $rid,
+                                 r.source_id = $source_id,
+                                 r.target_id = $target_id,
+                                 r += $properties,
+                                 r.updated_at = datetime()
                     RETURN r.id as edge_id
                     """
                     params = {
                         "source_id": edge["source_id"],
                         "target_id": edge["target_id"],
                         "rid": rid,
-                        "properties": edge,
+                        "properties": props,
                     }
                 else:
                     # 兼容旧逻辑：不使用rid
@@ -112,27 +132,18 @@ class Neo4jClient:
                     MATCH (source {{id: $source_id}})
                     MATCH (target {{id: $target_id}})
                     MERGE (source)-[r:{edge_type}]->(target)
-                    SET r += $properties
+                    SET r.source_id = $source_id,
+                        r.target_id = $target_id,
+                        r += $properties
+                    ON CREATE SET r.created_at = datetime()
                     SET r.updated_at = datetime()
                     RETURN r.id as edge_id
                     """
                     params = {
                         "source_id": edge["source_id"],
                         "target_id": edge["target_id"],
-                        "properties": edge,
+                        "properties": props,
                     }
-                
-                props = dict(edge)
-                if edge_type_raw:
-                    props["type_label"] = edge_type_raw
-                if "id" not in props:
-                    props["id"] = f"{edge_type}:{edge.get('source_id')}->{edge.get('target_id')}"
-                if "created_at" not in props:
-                    from datetime import datetime as _dt
-
-                    props["created_at"] = _dt.utcnow().isoformat()
-                
-                params["properties"] = props
                 _ = session.run(cypher, params).single()
                 return True
         except Exception as e:  # noqa: BLE001

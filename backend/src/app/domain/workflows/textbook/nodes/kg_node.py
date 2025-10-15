@@ -4,8 +4,15 @@ import logging
 from typing import Dict, Any, List, Tuple
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
-from app.domain.kg import KGPipeline, KGPipelineInput, generate_section_id
-from app.domain.kg.merge import KGMerger
+from app.domain.kg import (
+    KGPipeline, 
+    KGPipelineInput, 
+    generate_section_id,
+    KGMerger,
+    generate_book_id,
+    KGEvaluator,
+    KGDict,
+)
 from app.core.concurrency import get_concurrency_config
 
 logger = logging.getLogger(__name__)
@@ -63,7 +70,18 @@ def kg_node(state: Dict[str, Any]) -> Dict[str, Any]:
             return result_state
 
         logger.info(f"开始为 {len(passed_subchapters)} 个通过验证的子章节构建知识图谱")
-        kg_pipeline = KGPipeline(state.get("config", {}))
+        
+        # KGPipeline只需要settings参数
+        try:
+            from app.core.settings import get_settings
+            
+            settings = get_settings()
+            kg_pipeline = KGPipeline(settings)
+            logger.info("KGPipeline初始化成功")
+            
+        except Exception as e:
+            logger.error(f"KGPipeline初始化失败: {e}")
+            raise
 
         kg_parts: Dict[str, Dict[str, Any]] = {}
         section_ids: List[str] = []
@@ -105,21 +123,17 @@ def kg_node(state: Dict[str, Any]) -> Dict[str, Any]:
                         "chapters_covered": [],
                     }
 
-        # 暂时跳过整书级合并，因为数据已经在Neo4j中
-        # book_graph_node会处理整书级的数据组织
-        logger.info(f"跳过内存整书级合并，数据已存储到Neo4j，section_ids: {section_ids}")
+        # ✅ 按IMPROOVE_GUIDE.md要求：Section Scope数据已存储，book_graph_node将负责Book Scope合并
+        logger.info(f"Section级KG已存储到Neo4j，section_ids: {section_ids}")
         
-        # 生成book_id
-        from app.domain.kg.ids import generate_book_id
-        book_id = generate_book_id(topic, state.get("thread_id", ""))
-        logger.info(f"生成book_id: {book_id}")
+        # 生成book_id（按IMPROOVE_GUIDE.md第5.7节规范）
+        language = state.get("language", "zh")
+        book_id = generate_book_id(topic, language)
+        logger.info(f"生成book_id: {book_id}，将由book_graph_node执行Book Scope合并")
         
         # 使用旧的合并方式为兼容性
         merger = KGMerger()
         merged_kg = merger.merge_multiple_kgs(list(kg_parts.values()))
-
-        from app.domain.kg import KGEvaluator  # 仅用于类型与结构
-        from app.domain.kg.schemas import KGDict
         
         # 确保merged_kg是字典格式，兼容KGDict和普通字典
         if isinstance(merged_kg, KGDict):

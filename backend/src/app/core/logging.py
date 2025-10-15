@@ -2,6 +2,7 @@ import logging
 
 
 def setup_logging() -> None:
+    """设置全局日志配置"""
     logging.basicConfig(
         level=logging.INFO,
         format="%(asctime)s %(levelname)s %(name)s | %(message)s",

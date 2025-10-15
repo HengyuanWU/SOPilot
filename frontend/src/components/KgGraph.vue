@@ -68,21 +68,44 @@ const initCytoscape = () => {
         }
       },
       {
-        selector: 'node[type="concept"]',
+        selector: 'node[type="Concept"]',
         style: {
-          'background-color': '#FF851B'
+          'background-color': '#FF851B',
+          'shape': 'round-rectangle'  // 指南要求：Concept圆角矩形
         }
       },
       {
-        selector: 'node[type="entity"]',
+        selector: 'node[type="Chapter"], node[type="Subchapter"]',
         style: {
-          'background-color': '#2ECC40'
+          'background-color': '#2ECC40',
+          'shape': 'ellipse'  // 指南要求：Chapter/Subchapter圆形
         }
       },
       {
-        selector: 'node[type="relationship"]',
+        selector: 'node[type="Method"]',
         style: {
           'background-color': '#B10DC9',
+          'shape': 'round-rectangle'
+        }
+      },
+      {
+        selector: 'node[type="Example"]',
+        style: {
+          'background-color': '#01FF70',
+          'shape': 'round-rectangle'
+        }
+      },
+      {
+        selector: 'node[type="Dataset"]',
+        style: {
+          'background-color': '#FFDC00',
+          'shape': 'round-rectangle'
+        }
+      },
+      {
+        selector: 'node[type="Equation"]',
+        style: {
+          'background-color': '#F012BE',
           'shape': 'diamond'
         }
       },
@@ -100,6 +123,64 @@ const initCytoscape = () => {
           'text-background-color': '#fff',
           'text-background-opacity': 0.8,
           'text-background-padding': '2px'
+        }
+      },
+      // 指南要求：关系按type颜色区分
+      {
+        selector: 'edge[type="DEFINES"]',
+        style: {
+          'line-color': '#FF4136',
+          'target-arrow-color': '#FF4136'
+        }
+      },
+      {
+        selector: 'edge[type="EXPLAINS"]',
+        style: {
+          'line-color': '#0074D9',
+          'target-arrow-color': '#0074D9'
+        }
+      },
+      {
+        selector: 'edge[type="REQUIRES"]',
+        style: {
+          'line-color': '#FF851B',
+          'target-arrow-color': '#FF851B'
+        }
+      },
+      {
+        selector: 'edge[type="SIMILAR_TO"]',
+        style: {
+          'line-color': '#2ECC40',
+          'target-arrow-color': '#2ECC40'
+        }
+      },
+      {
+        selector: 'edge[type="CONTRASTS_WITH"]',
+        style: {
+          'line-color': '#B10DC9',
+          'target-arrow-color': '#B10DC9'
+        }
+      },
+      {
+        selector: 'edge[type="IMPLEMENTS"]',
+        style: {
+          'line-color': '#FFDC00',
+          'target-arrow-color': '#FFDC00'
+        }
+      },
+      {
+        selector: 'edge[type="PART_OF"]',
+        style: {
+          'line-color': '#AAAAAA',
+          'target-arrow-color': '#AAAAAA'
+        }
+      },
+      {
+        selector: 'edge[type="MENTIONS"]',
+        style: {
+          'line-color': '#85144b',
+          'target-arrow-color': '#85144b',
+          'line-style': 'dashed'
         }
       },
       {
@@ -138,15 +219,26 @@ const initCytoscape = () => {
     }
   })
 
-  // 添加交互事件
+  // 指南要求：点击行为控制台打印 id/name/type
   cy.on('tap', 'node', (evt) => {
     const node = evt.target
-    console.log('节点详情:', node.data())
+    const data = node.data()
+    console.log('节点点击:', {
+      id: data.id,
+      name: data.label || data.name,
+      type: data.type
+    })
   })
 
   cy.on('tap', 'edge', (evt) => {
     const edge = evt.target
-    console.log('边详情:', edge.data())
+    const data = edge.data()
+    console.log('关系点击:', {
+      id: data.id,
+      type: data.type,
+      source: data.source,
+      target: data.target
+    })
   })
 }
 

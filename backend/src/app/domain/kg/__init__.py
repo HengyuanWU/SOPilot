@@ -1,38 +1,27 @@
-from .schemas import KGPipelineInput, KGPipelineOutput, KGInsights, KGDict, NodeDict, EdgeDict
-from .ids import (
-    generate_section_id,
-    generate_content_hash,
-    generate_concept_id,
-    generate_chapter_id,
-    generate_subchapter_id,
-    slug,
-)
-from .normalizer import KGNormalizer
-from .evaluator import KGEvaluator
-from .thresholds import KGThresholds
-from .store import KGStore, MemoryKGStore
+#!/usr/bin/env python3
+# -*- coding: utf-8 -*-
+"""
+知识图谱领域模块
+"""
+
+from __future__ import annotations
+
 from .pipeline import KGPipeline
+from .schemas import KGPipelineInput, KGPipelineOutput, KGDict
+from .ids import generate_section_id, generate_book_id, generate_relation_rid
+from .evaluator import KGEvaluator
+from .merge import KGMerger
+from .store import KGStore
 
 __all__ = [
     "KGPipeline",
     "KGPipelineInput",
     "KGPipelineOutput",
-    "KGInsights",
     "KGDict",
-    "NodeDict",
-    "EdgeDict",
     "generate_section_id",
-    "generate_content_hash",
-    "generate_concept_id",
-    "generate_chapter_id",
-    "generate_subchapter_id",
-    "slug",
-    "KGNormalizer",
+    "generate_book_id",
+    "generate_relation_rid",
     "KGEvaluator",
-    "KGThresholds",
+    "KGMerger",
     "KGStore",
-    "MemoryKGStore",
 ]
-
-# Package marker for app.domain.kg
-

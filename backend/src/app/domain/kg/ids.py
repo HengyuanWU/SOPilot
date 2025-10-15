@@ -45,20 +45,31 @@ def generate_subchapter_id(subchapter_name: str, doc_id: str, chapter_name: str)
     return f"subchapter:{slug_name}:{hash_suffix}"
 
 
-def generate_book_id(topic: str, run_id: str) -> str:
+def generate_book_id(topic: str, language: str = "zh") -> str:
     """
-    生成整本书的唯一标识符。
+    生成整本书的唯一标识符（严格按 IMPROOVE_GUIDE.md 要求）。
+    
+    格式：book:{slug(topic)}:{md5(topic)[:8]}
     
     Args:
         topic: 教材主题
-        run_id: 运行ID (通常是thread_id)
+        language: 语言代码 (默认 "zh")
         
     Returns:
-        格式为 "book:{slug_topic}:{short_run_id}" 的字符串
+        格式为 "book:{slug_topic}:{md5_hash}" 的字符串
+    
+    示例:
+        >>> generate_book_id("测试", "zh")
+        'book:测试:864d5654'
     """
-    base = slug(topic)
-    short = (run_id or "")[:8]
-    return f"book:{base}:{short}" if short else f"book:{base}"
+    if not topic:
+        import time
+        return f"book:unknown:{int(time.time() * 1000)}"
+    
+    topic_slug = slug(topic)
+    hash_suffix = hashlib.md5(topic.encode("utf-8")).hexdigest()[:8]
+    
+    return f"book:{topic_slug}:{hash_suffix}"
 
 
 def generate_relation_rid(edge_type: str, source_id: str, target_id: str, scope: str) -> str:

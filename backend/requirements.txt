@@ -17,6 +17,11 @@ langgraph
 
 # RAG infrastructure
 qdrant-client>=1.7.0
-numpy>=1.24.0
 PyPDF2>=3.0.0
 python-multipart>=0.0.6
+
+# KG infrastructure (per IMPROOVE_GUIDE.md requirements - STRICT)
+neomodel==5.0.1
+spacy==3.7.4
+rapidfuzz==3.9.6
+numpy==1.26.4

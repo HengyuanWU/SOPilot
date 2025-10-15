@@ -46,7 +46,9 @@ class DocumentListResponse(BaseModel):
 
 class IndexRequest(BaseModel):
     """索引请求"""
+    # 前端可能传 clean，向后兼容
     force_recreate: bool = False
+    clean: Optional[bool] = None
     documents: Optional[List[str]] = None  # 特定文档列表，None表示全部
 
 
@@ -329,12 +331,17 @@ async def reindex_documents(
                 statistics={}
             )
         
+        # 兼容 clean 字段（如果提供则覆盖 force_recreate）
+        effective_force_recreate = request.force_recreate
+        if request.clean is not None:
+            effective_force_recreate = bool(request.clean)
+
         # 启动后台索引任务
         background_tasks.add_task(
             _background_full_index,
             rag_pipeline,
             file_paths,
-            request.force_recreate
+            effective_force_recreate
         )
         
         return IndexResponse(
@@ -342,7 +349,7 @@ async def reindex_documents(
             message=f"索引任务已启动，将处理 {len(file_paths)} 个文档",
             statistics={
                 "documents_to_process": len(file_paths),
-                "force_recreate": request.force_recreate
+                "force_recreate": effective_force_recreate
             }
         )
         

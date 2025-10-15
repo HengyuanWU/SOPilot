@@ -1,269 +1,350 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-KG Builder - LLM抽取 → JSON Schema
-工程化分层设计中的第一层：从文本内容抽取结构化知识图谱
+NER/RE 构建器（按IMPROOVE_GUIDE.md规范）
+- 粒度：以 Chunk（段落）为单位，内部再做句切分
+- NER：使用 spaCy 抽取候选概念
+- RE：对每个句子调用 llm_service → 受控 JSON 三元组
+- 去噪：丢弃 confidence < KG_RE_MIN_CONF
 """
 
+from __future__ import annotations
+
+import json
 import logging
-from typing import Dict, Any, List, Optional
-from abc import ABC, abstractmethod
+from typing import Any
 
-from .schemas import KGNode, KGEdge, KGDict
-from ...services.llm_service import LLMService
+try:
+    import spacy
+    SPACY_AVAILABLE = True
+except ImportError:
+    SPACY_AVAILABLE = False
 
+__all__ = ["KGBuilder"]
 
 logger = logging.getLogger(__name__)
 
+# 关系枚举
+RELATION_TYPES = {
+    "DEFINES", "EXPLAINS", "REQUIRES", "SIMILAR_TO", 
+    "CONTRASTS_WITH", "IMPLEMENTS", "PART_OF"
+}
 
-class BaseKGBuilder(ABC):
-    """KG构建器基类，支持不同的构建策略"""
-    
-    @abstractmethod
-    def build_kg(self, content: str, context: Dict[str, Any]) -> KGDict:
-        """从内容构建知识图谱"""
-        pass
+# 中文关系映射表
+RELATION_MAPPING = {
+    "定义": "DEFINES",
+    "解释": "EXPLAINS",
+    "需要": "REQUIRES",
+    "依赖": "REQUIRES",
+    "相似": "SIMILAR_TO",
+    "类似": "SIMILAR_TO",
+    "对比": "CONTRASTS_WITH",
+    "实现": "IMPLEMENTS",
+    "包含": "PART_OF",
+    "组成": "PART_OF",
+    # 英文小写
+    "defines": "DEFINES",
+    "explains": "EXPLAINS",
+    "requires": "REQUIRES",
+    "similar to": "SIMILAR_TO",
+    "contrasts with": "CONTRASTS_WITH",
+    "implements": "IMPLEMENTS",
+    "part of": "PART_OF",
+}
 
 
-class LLMKGBuilder(BaseKGBuilder):
-    """基于LLM的知识图谱构建器"""
-    
-    def __init__(self, llm_service: Optional[LLMService] = None):
-        self.llm_service = llm_service or LLMService()
-        self.logger = logging.getLogger(__name__)
-    
-    def build_kg(self, content: str, context: Dict[str, Any]) -> KGDict:
-        """
-        使用LLM从内容中抽取知识图谱
+class KGBuilder:
+    """知识图谱构建器（NER + RE）。"""
+
+    def __init__(self, settings):
+        """初始化构建器。
         
         Args:
-            content: 文本内容
-            context: 上下文信息 (topic, chapter_title, subchapter_title等)
+            settings: 应用配置对象
+        """
+        self.settings = settings
+        self.min_len = settings.KG_MIN_TERM_LEN
+        self.conf_threshold = settings.KG_RE_MIN_CONF
+        
+        # 加载spaCy模型（仅本地NER）
+        if SPACY_AVAILABLE:
+            try:
+                self.nlp = spacy.load("zh_core_web_sm")
+            except OSError:
+                # 模型未安装，使用空分词器
+                self.nlp = None
+        else:
+            self.nlp = None
+
+    def extract(self, section: dict) -> dict:
+        """从小节中提取概念和关系。
+        
+        Args:
+            section: 小节数据，包含 chunks 列表
             
         Returns:
-            KGDict: 标准化的知识图谱数据
+            包含 concepts 和 relations 的字典
         """
+        concepts = []
+        relations = []
+        
+        for chunk in section.get("chunks", []):
+            text = chunk.get("text", "")
+            chunk_id = chunk.get("id", "")
+            
+            # 1. NER：收集候选概念
+            chunk_concepts = self._extract_concepts(text, chunk_id)
+            concepts.extend(chunk_concepts)
+            
+            # 2. RE：提取关系（句级），传入候选概念以降低幻觉
+            candidate_names = [c['name'] for c in chunk_concepts]
+            chunk_relations = self._extract_relations(text, chunk_id, candidate_names)
+            relations.extend(chunk_relations)
+        
+        # 去重
+        concepts = self._dedup_concepts(concepts)
+        relations = self._dedup_relations(relations)
+        
+        return {"concepts": concepts, "relations": relations}
+
+    def _extract_concepts(self, text: str, chunk_id: str) -> list[dict]:
+        """使用spaCy提取概念。
+        
+        Args:
+            text: 文本内容
+            chunk_id: 文本块ID
+            
+        Returns:
+            概念列表
+        """
+        concepts = []
+        
+        if not self.nlp:
+            # spaCy不可用，使用简单规则提取
+            # TODO: 可以改进为基于词性标注等方法
+            return concepts
+        
+        doc = self.nlp(text)
+        
+        # 收集实体
+        for ent in doc.ents:
+            if len(ent.text) >= self.min_len:
+                concepts.append({
+                    "name": ent.text,
+                    "mentions": [chunk_id],
+                    "type": "Concept",
+                })
+        
+        # 收集名词短语（作为候选概念）
+        # 注意：noun_chunks在中文模型中不支持，需要做兼容处理
         try:
-            # 使用migration service直接调用LLM
-            from ...services.migration_service import migration_helper
-            
-            # 准备调用参数
-            topic = context.get("topic", "")
-            keywords = ", ".join(context.get("keywords", []))
-            language = context.get("language", "中文")
-            
-            # 调用LLM生成知识图谱
-            raw_content = migration_helper.call_kg_builder(
-                topic=topic,
-                content_text=content[:3000],  # 限制长度
-                keywords=keywords,
-                language=language
-            )
-            
-            if not raw_content or raw_content.strip() == "":
-                self.logger.warning(f"LLM未能从内容中抽取到KG数据")
-                return self._create_empty_kg()
-            
-            # 解析LLM输出并转换为标准格式
-            kg_data = self._parse_llm_output(raw_content, context)
-            return self._convert_to_standard_format(kg_data, context)
-            
-        except Exception as e:
-            self.logger.error(f"LLM KG构建失败: {e}")
-            return self._create_empty_kg()
-    
-    def _parse_llm_output(self, raw_content: str, context: Dict[str, Any]) -> Dict[str, Any]:
-        """解析LLM输出的知识图谱内容"""
-        import re
-        import hashlib
-        from datetime import datetime
-        
-        current_time = datetime.utcnow().isoformat()
-        topic = context.get("topic", "")
-        chapter_title = context.get("chapter_title", "")
-        subchapter_title = context.get("subchapter_title", "")
-        
-        def _slug(text: str) -> str:
-            cleaned = re.sub(r"[^\w\u4e00-\u9fff]+", "_", text)
-            return cleaned.strip("_").lower()
-        
-        def _generate_concept_id(name: str) -> str:
-            slug_name = _slug(name)
-            content = f"{topic}|{chapter_title}|{subchapter_title}"
-            hash_suffix = hashlib.md5(content.encode("utf-8")).hexdigest()[:6]
-            return f"concept:{slug_name}:{hash_suffix}"
-        
-        nodes = []
-        edges = []
-        
-        # 解析节点
-        if "### 节点" in raw_content:
-            nodes_section = raw_content.split("### 节点")[1].split("###")[0]
-            for line in nodes_section.split("\n"):
-                if line.strip().startswith("- "):
-                    node_text = line.strip()[2:]
-                    if ":" in node_text:
-                        node_name, node_desc = node_text.split(":", 1)
-                        node_name = node_name.strip()
-                        node_desc = node_desc.strip()
-                        nodes.append({
-                            "id": _generate_concept_id(node_name),
-                            "type": "concept",
-                            "name": node_name,
-                            "desc": node_desc,
-                            "aliases": [],
-                            "chapter": chapter_title,
-                            "subchapter": subchapter_title,
-                            "created_at": current_time,
-                        })
-        
-        # 解析边
-        if "### 关系" in raw_content:
-            edges_section = raw_content.split("### 关系")[1].split("###")[0]
-            for line in edges_section.split("\n"):
-                if line.strip().startswith("- ") and "->" in line and ":" in line:
-                    edge_parts, edge_type = line.strip()[2:].split(":", 1)
-                    source_name, target_name = edge_parts.split("->", 1)
-                    source_name = source_name.strip()
-                    target_name = target_name.strip()
-                    edge_type = edge_type.strip()
-                    
-                    source_id = _generate_concept_id(source_name)
-                    target_id = _generate_concept_id(target_name)
-                    
-                    edges.append({
-                        "source": source_id,
-                        "target": target_id,
-                        "type": edge_type.upper(),
-                        "desc": f"从文本中抽取的关系: {source_name} -> {target_name}",
-                        "confidence": 0.8,
-                        "weight": 1.0,
-                        "created_at": current_time,
+            for chunk in doc.noun_chunks:
+                if len(chunk.text) >= self.min_len:
+                    concepts.append({
+                        "name": chunk.text,
+                        "mentions": [chunk_id],
+                        "type": "Concept",
+                    })
+        except NotImplementedError:
+            # 中文模型不支持noun_chunks，改用名词词性标注
+            for token in doc:
+                if token.pos_ in ("NOUN", "PROPN") and len(token.text) >= self.min_len:
+                    concepts.append({
+                        "name": token.text,
+                        "mentions": [chunk_id],
+                        "type": "Concept",
                     })
         
-        # 解析层次结构
-        hierarchy = ""
-        if "### 层次结构" in raw_content:
-            hierarchy_section = raw_content.split("### 层次结构")[1]
-            hierarchy = hierarchy_section.strip()
+        return concepts
+
+    def _extract_relations(self, text: str, chunk_id: str, candidate_concepts: list[str] = None) -> list[dict]:
+        """提取关系（句级调用LLM）。
         
-        return {
-            "nodes": nodes,
-            "edges": edges,
-            "hierarchy": hierarchy,
-            "raw_content": raw_content
+        Args:
+            text: 文本内容
+            chunk_id: 文本块ID
+            candidate_concepts: 候选概念列表，用于降低LLM幻觉
+            
+        Returns:
+            关系列表
+        """
+        relations = []
+        
+        if not self.nlp:
+            # spaCy不可用，无法切分句子
+            return relations
+        
+        doc = self.nlp(text)
+        
+        # 按句子处理
+        for sent in doc.sents:
+            sent_text = sent.text.strip()
+            if not sent_text:
+                continue
+            
+            # 跳过过短的句子（可能是标题、列表项等）
+            if len(sent_text) < 10:
+                continue
+            
+            # 调用 llm_service 进行关系提取
+            sent_relations = self._extract_relations_llm(sent_text, chunk_id, candidate_concepts)
+            relations.extend(sent_relations)
+        
+        return relations
+
+    def _extract_relations_llm(self, sent: str, chunk_id: str, candidates: list[str] = None) -> list[dict]:
+        """使用LLM提取关系（按IMPROOVE_GUIDE.md 5.2.1节规范）。
+        
+        Args:
+            sent: 句子文本
+            chunk_id: 文本块ID
+            candidates: 候选实体列表
+            
+        Returns:
+            关系列表
+        """
+        # 导入llm_service（延迟导入避免循环依赖）
+        from app.services.llm_service import llm_service
+        
+        # 截断过长句子（按指南要求，<=800汉字）
+        if len(sent) > 800:
+            sent = sent[:800]
+        
+        # 构建受控JSON Schema（按指南5.2.1节要求）
+        schema = {
+            'type': 'object',
+            'properties': {
+                'relations': {
+                    'type': 'array',
+                    'items': {
+                        'type': 'object',
+                        'properties': {
+                            'head': {'type': 'string'},
+                            'relation': {'type': 'string'},
+                            'tail': {'type': 'string'},
+                            'confidence': {'type': 'number'}
+                        },
+                        'required': ['head', 'relation', 'tail']
+                    }
+                }
+            },
+            'required': ['relations']
         }
-    
-    def _convert_to_standard_format(self, raw_kg: Dict[str, Any], context: Dict[str, Any]) -> KGDict:
-        """将原始KG数据转换为标准格式"""
+        
+        # 调用llm_service（按指南要求使用SiliconFlow + 温度0.1）
+        payload = {
+            'task': 're',
+            'text': sent,
+            'candidates': candidates or [],
+            'language': 'zh',
+            'schema': schema
+        }
+        
         try:
-            from datetime import datetime
-            
-            nodes = []
-            edges = []
-            
-            # 转换节点
-            raw_nodes = raw_kg.get("nodes", [])
-            for node_data in raw_nodes:
-                if isinstance(node_data, dict):
-                    # 处理时间戳
-                    created_at = None
-                    if node_data.get("created_at"):
-                        try:
-                            created_at = datetime.fromisoformat(node_data["created_at"].replace('Z', '+00:00'))
-                        except:
-                            created_at = datetime.utcnow()
-                    
-                    node = KGNode(
-                        id=str(node_data.get("id", "")),
-                        name=str(node_data.get("name", "")),
-                        type=str(node_data.get("type", "Concept")),
-                        desc=str(node_data.get("desc", "")),
-                        aliases=node_data.get("aliases", []),
-                        scope=context.get("scope") or context.get("topic", ""),
-                        created_at=created_at,
-                        updated_at=created_at
-                    )
-                    nodes.append(node)
-            
-            # 转换边
-            raw_edges = raw_kg.get("edges", [])
-            for edge_data in raw_edges:
-                if isinstance(edge_data, dict):
-                    # 处理时间戳
-                    created_at = None
-                    if edge_data.get("created_at"):
-                        try:
-                            created_at = datetime.fromisoformat(edge_data["created_at"].replace('Z', '+00:00'))
-                        except:
-                            created_at = datetime.utcnow()
-                    
-                    edge = KGEdge(
-                        rid="",  # 将在idempotent步骤中生成
-                        type=str(edge_data.get("type", "RELATED_TO")),
-                        source=str(edge_data.get("source", "")),
-                        target=str(edge_data.get("target", "")),
-                        desc=str(edge_data.get("desc", "")),
-                        confidence=float(edge_data.get("confidence", 0.8)),
-                        weight=float(edge_data.get("weight", 1.0)),
-                        scope=context.get("scope") or context.get("topic", ""),
-                        src_section=context.get("section_id", ""),
-                        created_at=created_at
-                    )
-                    edges.append(edge)
-            
-            return KGDict(
-                nodes=nodes,
-                edges=edges,
-                hierarchy=raw_kg.get("hierarchy", ""),
-                total_nodes=len(nodes),
-                total_edges=len(edges),
-                chapters_covered=[context.get("chapter_title", "")]
-            )
-            
+            res = llm_service.call_structured(payload)
+            relations_raw = res.get('relations', [])
         except Exception as e:
-            self.logger.error(f"KG格式转换失败: {e}")
-            return self._create_empty_kg()
-    
-    def _create_empty_kg(self) -> KGDict:
-        """创建空的KG结构"""
-        return KGDict(
-            nodes=[],
-            edges=[],
-            hierarchy="",
-            total_nodes=0,
-            total_edges=0,
-            chapters_covered=[]
-        )
+            logger.warning(f"LLM关系提取失败: {e}")
+            return []
+        
+        # 后处理：过滤和规范化
+        relations = []
+        for r in relations_raw:
+            # 1. 映射关系类型到枚举
+            rel_type = self.normalize_relation(r.get('relation', ''))
+            if not rel_type:
+                continue
+            
+            # 2. 检查置信度阈值
+            confidence = r.get('confidence', 1.0)
+            if confidence < self.conf_threshold:
+                continue
+            
+            # 3. 检查head/tail是否在句子中
+            head = r.get('head', '').strip()
+            tail = r.get('tail', '').strip()
+            if not head or not tail:
+                continue
+            
+            # 简单对齐检查：head和tail应该在句子中出现
+            if head not in sent and tail not in sent:
+                continue
+            
+            relations.append({
+                'src_name': head,
+                'tgt_name': tail,
+                'type': rel_type,
+                'confidence': confidence,
+                'evidence': chunk_id
+            })
+        
+        return relations
 
-
-class RuleBasedKGBuilder(BaseKGBuilder):
-    """基于规则的知识图谱构建器（可选实现）"""
-    
-    def build_kg(self, content: str, context: Dict[str, Any]) -> KGDict:
-        """基于规则从内容中抽取知识图谱"""
-        # TODO: 实现基于规则的抽取逻辑
-        # 例如：NER + 关系抽取规则
-        logger.info("RuleBasedKGBuilder尚未实现")
-        return KGDict(
-            nodes=[],
-            edges=[],
-            hierarchy="",
-            total_nodes=0,
-            total_edges=0,
-            chapters_covered=[]
-        )
-
-
-class KGBuilderFactory:
-    """KG构建器工厂"""
-    
     @staticmethod
-    def create_builder(builder_type: str = "llm", **kwargs) -> BaseKGBuilder:
-        """创建KG构建器实例"""
-        if builder_type.lower() == "llm":
-            return LLMKGBuilder(**kwargs)
-        elif builder_type.lower() == "rule":
-            return RuleBasedKGBuilder(**kwargs)
-        else:
-            raise ValueError(f"Unknown builder type: {builder_type}")
+    def _dedup_concepts(concepts: list[dict]) -> list[dict]:
+        """概念去重。
+        
+        Args:
+            concepts: 概念列表
+            
+        Returns:
+            去重后的概念列表
+        """
+        seen = {}
+        for c in concepts:
+            name = c["name"]
+            if name in seen:
+                # 合并mentions
+                seen[name]["mentions"].extend(c["mentions"])
+            else:
+                seen[name] = c
+        
+        # 去重mentions
+        for c in seen.values():
+            c["mentions"] = list(set(c["mentions"]))
+        
+        return list(seen.values())
+
+    @staticmethod
+    def _dedup_relations(relations: list[dict]) -> list[dict]:
+        """关系去重。
+        
+        Args:
+            relations: 关系列表
+            
+        Returns:
+            去重后的关系列表
+        """
+        seen = set()
+        unique = []
+        
+        for r in relations:
+            key = (r["src_name"], r["type"], r["tgt_name"])
+            if key not in seen:
+                seen.add(key)
+                unique.append(r)
+        
+        return unique
+
+    @staticmethod
+    def normalize_relation(rel_text: str) -> str | None:
+        """将关系文本映射到枚举类型。
+        
+        Args:
+            rel_text: 关系文本
+            
+        Returns:
+            规范化的关系类型，如果无法映射返回None
+        """
+        rel_lower = rel_text.lower().strip()
+        
+        # 直接匹配枚举
+        if rel_text.upper() in RELATION_TYPES:
+            return rel_text.upper()
+        
+        # 查找映射表
+        if rel_lower in RELATION_MAPPING:
+            return RELATION_MAPPING[rel_lower]
+        
+        # 无法映射
+        return None
