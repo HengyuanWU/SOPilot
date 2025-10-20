@@ -8,7 +8,7 @@ Neo4j Schema 安装（约束/索引）
 from __future__ import annotations
 import logging
 
-from neomodel import db
+from app.infrastructure.graph_store.neomodel_store import Neo4jStore
 
 logger = logging.getLogger(__name__)
 
@@ -46,8 +46,8 @@ def _check_constraint_exists(name: str) -> bool:
     """检查约束是否已存在"""
     try:
         query = "SHOW CONSTRAINTS YIELD name WHERE name = $name RETURN count(*) > 0 as exists"
-        result, _ = db.cypher_query(query, {"name": name})
-        return result[0][0] if result else False
+        result = Neo4jStore.run_cypher(query, {"name": name})
+        return result[0]['exists'] if result else False
     except Exception:
         # 如果查询失败（可能是旧版本Neo4j），返回False让它尝试创建
         return False
@@ -57,8 +57,8 @@ def _check_index_exists(name: str) -> bool:
     """检查索引是否已存在"""
     try:
         query = "SHOW INDEXES YIELD name WHERE name = $name RETURN count(*) > 0 as exists"
-        result, _ = db.cypher_query(query, {"name": name})
-        return result[0][0] if result else False
+        result = Neo4jStore.run_cypher(query, {"name": name})
+        return result[0]['exists'] if result else False
     except Exception:
         # 如果查询失败（可能是旧版本Neo4j），返回False让它尝试创建
         return False
@@ -106,7 +106,7 @@ def install_schema() -> None:
     # 执行创建
     created_count = 0
     for cypher in constraints_to_create + indexes_to_create:
-        db.cypher_query(cypher)
+        Neo4jStore.run_cypher(cypher)
         created_count += 1
     
     if created_count > 0:

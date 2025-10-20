@@ -10,16 +10,21 @@ from datetime import datetime
 
 from neomodel import (
     ArrayProperty,
+    BooleanProperty,
     DateTimeProperty,
     FloatProperty,
+    IntegerProperty,
+    JSONProperty,
     StringProperty,
     StructuredNode,
     StructuredRel,
+    RelationshipTo,
 )
 
 __all__ = [
     "KGRel",
     "BaseEntity",
+    "Entity",
     "Concept",
     "Chapter",
     "Subchapter",
@@ -63,6 +68,11 @@ class BaseEntity(StructuredNode):
         """更新 updated_at 时间戳。"""
         self.updated_at = datetime.utcnow()
         self.save()
+class Entity(BaseEntity):
+    """通用實體節點（與現有 `(e:Entity)` 查詢對齊）。"""
+
+    pass
+
 
 
 # —— 9 类节点（标签名 = 类名）——
@@ -111,13 +121,34 @@ class Equation(BaseEntity):
 class Doc(BaseEntity):
     """文档节点。"""
 
-    pass
+    # 與 RAG 文檔存儲對齊的屬性
+    filename = StringProperty()
+    filepath = StringProperty()
+    content_type = StringProperty()
+    size = IntegerProperty()
+    checksum = StringProperty()
+    metadata = JSONProperty()
+    indexed_at = StringProperty()
+
+    # 關係
+    chunks = RelationshipTo("Chunk", "HAS_CHUNK")
 
 
 class Chunk(BaseEntity):
     """文本块节点。"""
 
-    pass
+    # 與 RAG 塊存儲對齊的屬性
+    doc_id = StringProperty()
+    chunk_index = IntegerProperty()
+    content = StringProperty()
+    content_hash = StringProperty()
+    start_char = IntegerProperty()
+    end_char = IntegerProperty()
+    vector_id = StringProperty()
+    metadata = JSONProperty()
+
+    # 關係：指向通用 Entity，帶關係屬性（如 confidence）
+    mentions = RelationshipTo("Entity", "MENTIONS", model=KGRel)
 
 
 

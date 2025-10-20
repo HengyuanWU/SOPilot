@@ -92,21 +92,7 @@ build/
 # Project specific
 backend_logs*.txt
 check_spacy.py
-scripts/test_*.py
-scripts/diagnose_*.py
-scripts/verify_*.py
-scripts/check_*.py
-scripts/trace_*.py
-scripts/debug_*.py
-scripts/analyze_*.py
-scripts/clean_*.py
-scripts/add_*.py
-scripts/acceptance_test.py
-scripts/install_*.py
-scripts/run_*.py
-scripts/setup_*.py
-scripts/*.ps1
-scripts/*.sh
+scripts/
 
 # Knowledge base data
 knowledge_base/ 

@@ -12,6 +12,7 @@ from datetime import datetime
 from pathlib import Path
 
 from ....domain.kg.schemas import DocumentDict, ChunkDict
+from ....domain.kg.models import Doc, Chunk as ChunkNode, Entity
 from ....infrastructure.graph_store.neo4j_client import Neo4jClient
 
 logger = logging.getLogger(__name__)
@@ -35,38 +36,32 @@ class DocumentKGStore:
             bool: 是否创建成功
         """
         try:
-            cypher = """
-            MERGE (d:Document {id: $id})
-            SET d.filename = $filename,
-                d.filepath = $filepath,
-                d.content_type = $content_type,
-                d.size = $size,
-                d.checksum = $checksum,
-                d.metadata = $metadata,
-                d.indexed_at = $indexed_at,
-                d.created_at = $created_at,
-                d.updated_at = datetime()
-            RETURN d.id as doc_id
-            """
-            
-            params = {
-                "id": doc_data["id"],
-                "filename": doc_data["filename"],
-                "filepath": doc_data["filepath"],
-                "content_type": doc_data["content_type"],
-                "size": doc_data["size"],
-                "checksum": doc_data["checksum"],
-                "metadata": doc_data["metadata"],
+            # 使用 neomodel Doc 模型合併/更新
+            doc_id = doc_data["id"]
+            props = {
+                "id": doc_id,
+                "name": doc_data.get("filename") or Path(doc_data.get("filepath", "")).name,
+                "type": "Document",
+                "filename": doc_data.get("filename"),
+                "filepath": doc_data.get("filepath"),
+                "content_type": doc_data.get("content_type"),
+                "size": doc_data.get("size"),
+                "checksum": doc_data.get("checksum"),
+                "metadata": doc_data.get("metadata"),
                 "indexed_at": doc_data.get("indexed_at"),
-                "created_at": doc_data.get("created_at") or datetime.now().isoformat()
+                "scope": doc_data.get("scope"),
             }
-            
-            result = self.client.execute_cypher(cypher, params)
-            
-            if result:
-                self.logger.info(f"文档节点创建成功: {doc_data['id']}")
-                return True
-            return False
+
+            node = Doc.nodes.get_or_none(id=doc_id)
+            if node is None:
+                node = Doc(**props)
+            else:
+                for k, v in props.items():
+                    setattr(node, k, v)
+            node.save()
+
+            self.logger.info(f"文档节点创建成功: {doc_id}")
+            return True
             
         except Exception as e:
             self.logger.error(f"创建文档节点失败: {e}")
@@ -83,40 +78,32 @@ class DocumentKGStore:
             bool: 是否创建成功
         """
         try:
-            cypher = """
-            MERGE (c:Chunk {id: $id})
-            SET c.doc_id = $doc_id,
-                c.chunk_index = $chunk_index,
-                c.content = $content,
-                c.content_hash = $content_hash,
-                c.start_char = $start_char,
-                c.end_char = $end_char,
-                c.vector_id = $vector_id,
-                c.metadata = $metadata,
-                c.created_at = $created_at,
-                c.updated_at = datetime()
-            RETURN c.id as chunk_id
-            """
-            
-            params = {
-                "id": chunk_data["id"],
-                "doc_id": chunk_data["doc_id"],
-                "chunk_index": chunk_data["chunk_index"],
-                "content": chunk_data["content"],
-                "content_hash": chunk_data["content_hash"],
-                "start_char": chunk_data["start_char"],
-                "end_char": chunk_data["end_char"],
+            chunk_id = chunk_data["id"]
+            props = {
+                "id": chunk_id,
+                "name": f"chunk-{chunk_data.get('chunk_index', 0)}",
+                "type": "Chunk",
+                "doc_id": chunk_data.get("doc_id"),
+                "chunk_index": chunk_data.get("chunk_index"),
+                "content": chunk_data.get("content"),
+                "content_hash": chunk_data.get("content_hash"),
+                "start_char": chunk_data.get("start_char"),
+                "end_char": chunk_data.get("end_char"),
                 "vector_id": chunk_data.get("vector_id"),
-                "metadata": chunk_data["metadata"],
-                "created_at": chunk_data.get("created_at") or datetime.now().isoformat()
+                "metadata": chunk_data.get("metadata"),
+                "scope": chunk_data.get("scope"),
             }
-            
-            result = self.client.execute_cypher(cypher, params)
-            
-            if result:
-                self.logger.info(f"块节点创建成功: {chunk_data['id']}")
-                return True
-            return False
+
+            node = ChunkNode.nodes.get_or_none(id=chunk_id)
+            if node is None:
+                node = ChunkNode(**props)
+            else:
+                for k, v in props.items():
+                    setattr(node, k, v)
+            node.save()
+
+            self.logger.info(f"块节点创建成功: {chunk_id}")
+            return True
             
         except Exception as e:
             self.logger.error(f"创建块节点失败: {e}")
@@ -134,21 +121,14 @@ class DocumentKGStore:
             bool: 是否创建成功
         """
         try:
-            cypher = """
-            MATCH (d:Document {id: $doc_id})
-            MATCH (c:Chunk {id: $chunk_id})
-            MERGE (d)-[r:HAS_CHUNK]->(c)
-            SET r.created_at = datetime()
-            RETURN type(r) as rel_type
-            """
-            
-            params = {"doc_id": doc_id, "chunk_id": chunk_id}
-            result = self.client.execute_cypher(cypher, params)
-            
-            if result:
-                self.logger.debug(f"文档-块关系创建成功: {doc_id} -> {chunk_id}")
-                return True
-            return False
+            d = Doc.nodes.get_or_none(id=doc_id)
+            c = ChunkNode.nodes.get_or_none(id=chunk_id)
+            if not d or not c:
+                return False
+            # 建立關係（無屬性）
+            d.chunks.connect(c)
+            self.logger.debug(f"文档-块关系创建成功: {doc_id} -> {chunk_id}")
+            return True
             
         except Exception as e:
             self.logger.error(f"创建文档-块关系失败: {e}")
@@ -173,27 +153,30 @@ class DocumentKGStore:
         try:
             created_count = 0
             
+            cnode = ChunkNode.nodes.get_or_none(id=chunk_id)
+            if not cnode:
+                return 0
             for i, entity_id in enumerate(entity_ids):
                 confidence = confidence_scores[i] if confidence_scores and i < len(confidence_scores) else 0.8
-                
-                cypher = """
-                MATCH (c:Chunk {id: $chunk_id})
-                MATCH (e:Entity {id: $entity_id})
-                MERGE (c)-[r:MENTIONS]->(e)
-                SET r.confidence = $confidence,
-                    r.created_at = datetime()
-                RETURN type(r) as rel_type
-                """
-                
-                params = {
-                    "chunk_id": chunk_id,
-                    "entity_id": entity_id,
-                    "confidence": confidence
-                }
-                
-                result = self.client.execute_cypher(cypher, params)
-                if result:
-                    created_count += 1
+                enode = Entity.nodes.get_or_none(id=entity_id)
+                if not enode:
+                    continue
+                # 使用帶 KGRel 的 mentions 關係，填充必要欄位
+                rel = cnode.mentions.relationship(enode)
+                if rel is None:
+                    cnode.mentions.connect(enode, {
+                        "rid": f"MENTIONS:{chunk_id}->{entity_id}",
+                        "type": "MENTIONS",
+                        "src": chunk_id,  # 源可後續改為 section_id
+                        "scope": cnode.scope or "",
+                        "confidence": float(confidence),
+                        "weight": 1.0,
+                        "evidence": chunk_id,
+                    })
+                else:
+                    rel.confidence = float(confidence)
+                    rel.save()
+                created_count += 1
             
             self.logger.info(f"创建了 {created_count}/{len(entity_ids)} 个MENTIONS关系")
             return created_count
@@ -214,6 +197,15 @@ class DocumentKGStore:
             List[Dict]: 块信息列表
         """
         try:
+            # 使用 neomodel 查找（回退到 Cypher 如需更高效可再優化）
+            results: List[Dict[str, Any]] = []
+            for eid in entity_ids:
+                enode = Entity.nodes.get_or_none(id=eid)
+                if not enode:
+                    continue
+                # 反向遍歷 mentions 關係：被某實體提及的 chunks
+                rels = enode.inbound_relationships.relationship_model
+                # 簡化：用 Cypher 更高效
             cypher = """
             MATCH (e:Entity)-[:MENTIONS]-(c:Chunk)
             WHERE e.id IN $entity_ids
@@ -225,10 +217,8 @@ class DocumentKGStore:
             ORDER BY entity_mentions DESC
             LIMIT $limit
             """
-            
             params = {"entity_ids": entity_ids, "limit": limit}
-            result = self.client.execute_cypher(cypher, params)
-            
+            result = self.client.execute_cypher(cypher, params)  # 查詢類，保留原接口
             return result or []
             
         except Exception as e:
@@ -246,19 +236,21 @@ class DocumentKGStore:
             List[Dict]: 实体信息列表
         """
         try:
-            cypher = """
-            MATCH (c:Chunk {id: $chunk_id})-[r:MENTIONS]->(e:Entity)
-            RETURN e.id as entity_id,
-                   e.name as entity_name,
-                   e.type as entity_type,
-                   r.confidence as confidence
-            ORDER BY r.confidence DESC
-            """
-            
-            params = {"chunk_id": chunk_id}
-            result = self.client.execute_cypher(cypher, params)
-            
-            return result or []
+            # 直接通過關係遍歷以獲取屬性，為保持輸出結構，組裝字典
+            cnode = ChunkNode.nodes.get_or_none(id=chunk_id)
+            if not cnode:
+                return []
+            rows: List[Dict[str, Any]] = []
+            for enode in cnode.mentions:
+                rel = cnode.mentions.relationship(enode)
+                rows.append({
+                    "entity_id": enode.id,
+                    "entity_name": enode.name,
+                    "entity_type": enode.type,
+                    "confidence": getattr(rel, "confidence", 0.8),
+                })
+            rows.sort(key=lambda x: x.get("confidence", 0), reverse=True)
+            return rows
             
         except Exception as e:
             self.logger.error(f"查找块提及实体失败: {e}")
@@ -276,6 +268,7 @@ class DocumentKGStore:
             Dict: 上下文图谱数据
         """
         try:
+            # 複雜遍歷仍保留 Cypher（查詢類）
             cypher = f"""
             MATCH (c:Chunk {{id: $chunk_id}})
             CALL {{
@@ -287,10 +280,8 @@ class DocumentKGStore:
             CALL apoc.convert.toTree(paths) yield value
             RETURN value as context_graph
             """
-            
             params = {"chunk_id": chunk_id}
             result = self.client.execute_cypher(cypher, params)
-            
             if result and result[0]:
                 return result[0]["context_graph"]
             return {}

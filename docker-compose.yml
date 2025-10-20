@@ -90,6 +90,7 @@ services:
       # 仅挂载后端源码与依赖清单，避免覆盖 /app 下其他内容
       - ./backend/src:/app/backend/src
       - ./backend/requirements.txt:/app/backend/requirements.txt
+      - ./backend/tests:/app/backend/tests
       # 业务输出可单独挂载
       - ./output:/app/output
     restart: unless-stopped

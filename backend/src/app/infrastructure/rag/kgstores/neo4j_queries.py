@@ -47,12 +47,16 @@ class Neo4jKGQueries:
             from app.core.settings import get_settings
             
             settings = get_settings()
-            return Neo4jClient(
+            client = Neo4jClient(
                 uri=settings.neo4j.uri,
                 user=settings.neo4j.user,
                 password=settings.neo4j.password,
                 database=settings.neo4j.database
             )
+            # 连接到 Neo4j
+            if not client.connect():
+                self.logger.warning("Neo4j 连接失败，某些功能可能不可用")
+            return client
         except Exception as e:
             self.logger.error(f"获取Neo4j客户端失败: {e}")
             raise
@@ -77,9 +81,17 @@ class Neo4jKGQueries:
             
             # 基础匹配
             if entity_types:
-                # 指定类型的实体
-                types_str = "|".join(entity_types)
-                cypher_parts.append(f"MATCH (n:{types_str})")
+                # 指定类型的实体（白名單校驗並展開為多個 MATCH 子句以避免注入）
+                allowed = {"Entity", "Concept", "Method", "Example", "Dataset", "Equation", "Doc", "Chunk"}
+                safe_types = [t for t in entity_types if t in allowed]
+                if not safe_types:
+                    # 無有效類型時回退到通用匹配
+                    cypher_parts.append("MATCH (n)")
+                else:
+                    # 使用 WHERE labels(n) CONTAINS 任一類型 或 展開 OR 判斷
+                    cypher_parts.append("MATCH (n)")
+                    label_checks = " OR ".join([f"'{t}' IN labels(n)" for t in safe_types])
+                    cypher_parts.append(f"WHERE ({label_checks})")
                 
             else:
                 # 所有实体

@@ -14,6 +14,7 @@ import logging
 from typing import Dict, Any
 
 from app.domain.kg import generate_relation_rid, generate_book_id, KGStore
+from app.domain.kg.merger import BookMerger
 
 logger = logging.getLogger(__name__)
 
@@ -103,7 +104,21 @@ def book_graph_node(state: Dict[str, Any]) -> Dict[str, Any]:
             book_stats["edges_deleted"] = edges_deleted
             logger.info(f"清理旧整本书关系: {edges_deleted} 条")
             
-            # 从Neo4j中读取所有section数据并转写为book scope
+            # ✅ 步骤1: 节点合并（在聚合边之前）
+            logger.info("步骤1: 开始节点合并...")
+            merger = BookMerger(store)
+            consolidation_result = merger.consolidate_nodes(book_id, section_ids)
+            
+            if consolidation_result.get("success"):
+                logger.info(f"节点合并完成: 合并了 {consolidation_result.get('merged_count', 0)} 组节点")
+                logger.info(f"节点映射关系: {len(consolidation_result.get('node_mapping', {}))} 个节点被重定向")
+            else:
+                logger.warning(f"节点合并失败: {consolidation_result.get('error')}")
+            
+            # 获取节点映射表（用于边的重定向）
+            node_mapping = consolidation_result.get("node_mapping", {})
+            
+            # ✅ 步骤2: 从Neo4j中读取所有section数据并转写为book scope
             from app.infrastructure.graph_store.neo4j_client import create_neo4j_client
             from app.core.settings import get_settings
             
@@ -160,6 +175,10 @@ def book_graph_node(state: Dict[str, Any]) -> Dict[str, Any]:
                         edge_type = edge_data.get("type", "")
                         source_id = edge_data.get("source_id", "")
                         target_id = edge_data.get("target_id", "")
+                        
+                        # ✅ 应用节点映射：将旧节点ID重定向到合并后的节点ID
+                        source_id = node_mapping.get(source_id, source_id)
+                        target_id = node_mapping.get(target_id, target_id)
                         
                         # 生成book scope下的rid
                         rid = generate_relation_rid(edge_type, source_id, target_id, book_scope)

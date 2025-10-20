@@ -66,18 +66,12 @@ class KGStore:
             for c in chunk:
                 cypher = """
                 MERGE (n:Concept {id: $id})
-                ON CREATE SET 
-                    n.name = $name,
+                SET n.name = $name,
                     n.type = 'Concept',
                     n.aliases = $aliases,
                     n.desc = $desc,
-                    n.created_at = datetime(),
-                    n.updated_at = datetime()
-                ON MATCH SET
-                    n.name = $name,
-                    n.aliases = $aliases,
-                    n.desc = $desc,
-                    n.updated_at = datetime()
+                    n.updated_at = datetime(),
+                    n.created_at = COALESCE(n.created_at, datetime())
                 """
                 params = {
                     "id": c["id"],
@@ -110,11 +104,10 @@ class KGStore:
                     continue
                 cypher = """
                 MERGE (n:Chunk {id: $id})
-                ON CREATE SET 
-                    n.name = $name,
+                SET n.name = $name,
                     n.type = 'Chunk',
-                    n.created_at = datetime(),
-                    n.updated_at = datetime()
+                    n.updated_at = datetime(),
+                    n.created_at = COALESCE(n.created_at, datetime())
                 """
                 params = {"id": cid, "name": cid}
                 queries.append((cypher, params))

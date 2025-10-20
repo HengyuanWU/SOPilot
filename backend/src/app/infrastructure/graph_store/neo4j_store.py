@@ -4,8 +4,9 @@
 基础设施：Neo4j 图存储实现
 
 职责：
-- 基于 core.kg_store.neo4j_client 提供的 Neo4jClient 封装 KGStore 接口
-- 供域层 KGPipeline 直接依赖（不再依赖 modules.*）
+- 基于 Neo4jClient 封装 KGStore 接口
+- 供域层 KGPipeline 直接依赖
+- 已迁移到使用 neomodel 统一网关
 """
 
 from __future__ import annotations
@@ -20,58 +21,8 @@ from ...domain.kg.store import KGStore
 logger = logging.getLogger(__name__)
 
 
-class Neo4jStore:
-    """
-    IMPROOVE_GUIDE.md第6节严格要求的Neo4j统一网关
-    
-    提供固定方法（若缺失则补齐）：
-    - run_cypher(query: str, params: dict | None = None) -> list[dict]
-    - run_tx(queries: list[tuple[str, dict]]) -> None  # 批量事务
-    """
-    
-    def __init__(self, client: Neo4jClient):
-        self.client = client
-    
-    def run_cypher(self, query: str, params: dict | None = None) -> list[dict]:
-        """
-        IMPROOVE_GUIDE.md第6节要求的固定方法
-        
-        Args:
-            query: Cypher查询语句
-            params: 查询参数
-            
-        Returns:
-            list[dict]: 查询结果列表
-        """
-        try:
-            if not self.client:
-                return []
-            
-            result = self.client.execute_cypher(query, params or {})
-            return result if result else []
-            
-        except Exception as e:
-            logger.error(f"run_cypher执行失败: {e}")
-            return []
-    
-    def run_tx(self, queries: list[tuple[str, dict]]) -> None:
-        """
-        IMPROOVE_GUIDE.md第6节要求的固定方法：批量事务
-        
-        Args:
-            queries: [(query, params), ...] 查询和参数的元组列表
-        """
-        try:
-            if not self.client or not queries:
-                return
-            
-            # 使用client的事务功能执行批量操作
-            success = self.client.execute_transaction(queries)
-            if not success:
-                logger.error("批量事务执行失败")
-                
-        except Exception as e:
-            logger.error(f"run_tx执行失败: {e}")
+# 注意：Neo4jStore 统一网关已迁移到 neomodel_store.py
+# 如需使用 Neo4jStore，请从 .neomodel_store import Neo4jStore
 
 
 class Neo4jKGStore:
