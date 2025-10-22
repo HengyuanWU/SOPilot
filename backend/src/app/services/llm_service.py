@@ -265,6 +265,88 @@ class LLMService:
                 "available": False,
                 "error": str(e)
             }
+    
+    def call_structured(self, payload: Dict[str, Any]) -> Dict[str, Any]:
+        """
+        调用LLM进行结构化输出（按IMPROOVE_GUIDE.md第5.2.1节要求）
+        
+        专门用于KG关系抽取等需要JSON Schema约束的场景
+        
+        Args:
+            payload: 包含task, text, candidates, language, schema等字段
+            
+        Returns:
+            结构化的LLM响应，符合提供的JSON Schema
+        """
+        try:
+            task = payload.get("task", "relation_extraction")
+            text = payload.get("text", "")
+            candidates = payload.get("candidates", [])
+            language = payload.get("language", "zh")
+            schema = payload.get("schema", {})
+            
+            if not text:
+                return {"relations": []}
+            
+            # 构建结构化提示（按指南要求）
+            system_prompt = """你是一个知识图谱关系抽取专家。请从给定的句子中抽取实体间的关系。
+
+要求：
+1. 只抽取句子中明确存在的关系
+2. 实体必须在句子中出现或与候选实体匹配
+3. 关系类型限定为：RELATES_TO, PART_OF, REQUIRES, IMPLEMENTS, CONTRASTS_WITH, DEFINES, EXPLAINS, SIMILAR_TO
+4. 为每个关系提供0.0-1.0的置信度分数
+5. 严格按照JSON格式返回"""
+
+            user_prompt = f"""句子：{text}
+
+候选实体：{', '.join(candidates) if candidates else '无'}
+
+请按以下JSON格式返回关系：
+{{"relations": [{{"head": "实体1", "relation": "关系类型", "tail": "实体2", "confidence": 0.85}}]}}
+
+如果没有发现关系，返回：{{"relations": []}}"""
+
+            # 构建LLM请求（指南要求：温度0.1，SiliconFlow提供商）
+            request = LLMRequest(
+                provider="siliconflow",  # 指南要求默认提供商
+                model="Qwen/Qwen2.5-7B-Instruct",  # 指南要求的模型
+                messages=[
+                    {"role": "system", "content": system_prompt},
+                    {"role": "user", "content": user_prompt}
+                ],
+                temperature=0.1,  # 指南要求固定温度
+                max_tokens=500,
+                timeout=30,
+                tags={"task": task, "structured": "true"}
+            )
+            
+            # 调用LLM
+            response = self.llm_router.generate(request)
+            
+            # 解析JSON响应
+            import json
+            try:
+                result = json.loads(response.content.strip())
+                return result
+            except json.JSONDecodeError:
+                # 如果JSON解析失败，尝试从响应中提取JSON
+                import re
+                json_match = re.search(r'\{.*\}', response.content, re.DOTALL)
+                if json_match:
+                    try:
+                        result = json.loads(json_match.group())
+                        return result
+                    except:
+                        pass
+                
+                # 解析失败，返回空结果
+                logger.warning(f"Failed to parse structured LLM response: {response.content}")
+                return {"relations": []}
+                
+        except Exception as e:
+            logger.error(f"Structured LLM call failed: {e}")
+            return {"relations": []}
 
 
 # Legacy compatibility function

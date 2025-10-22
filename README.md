@@ -276,6 +276,13 @@ APP_NEO4J__PASSWORD=test1234
 APP_NEO4J__DATABASE=neo4j
 
 # ===================
+# Embedding模型配置（用于RAG和KG）
+# ===================
+APP_RAG__EMBED_MODEL=BAAI/bge-m3        # RAG系统的embedding模型
+APP_RAG__EMBED_PROVIDER=siliconflow     # Embedding提供商
+APP_KG_EMBEDDING_MODEL=BAAI/bge-m3      # KG系统的embedding模型
+
+# ===================
 # 并发与性能配置
 # ===================
 APP_CONCURRENCY__WRITER__MAX_WORKERS=50
@@ -289,6 +296,8 @@ APP_MIDDLEWARE__MAX_RETRIES=3
 APP_MIDDLEWARE__DEFAULT_TIMEOUT=300
 APP_MIDDLEWARE__REQUESTS_PER_MINUTE=60
 ```
+
+> 💡 **提示**: 关于Embedding模型的详细配置和切换指南，请参考 [Embedding配置文档](docs/EMBEDDING_CONFIG.md)。
 
 ### 服务端口说明
 
@@ -629,6 +638,8 @@ GET /api/v1/runs/{run_id}/archive.zip
 - **改进指南**: `docs/IMPROOVE_GUIDE.md` - 系统升级和功能扩展计划
 - **前端招募**: `docs/FRONTEND_DEVELOPER_RECRUITMENT.md` - 前端开发者入门指南
 - **开发进度**: `docs/DEVELOPMENT_PROGRESS.md` - 项目开发进度跟踪
+- **Embedding配置**: `docs/EMBEDDING_CONFIG.md` - Embedding模型配置详解
+- **快速配置指南**: `docs/QUICK_CONFIG_GUIDE.md` - 环境配置快速参考
 
 ## 🤝 贡献指南
 

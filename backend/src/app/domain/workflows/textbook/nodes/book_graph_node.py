@@ -13,8 +13,8 @@
 import logging
 from typing import Dict, Any
 
-from app.domain.kg.ids import generate_book_id, generate_relation_rid
-from app.domain.kg.store import KGStore
+from app.domain.kg import generate_relation_rid, generate_book_id, KGStore
+from app.domain.kg.merger import BookMerger
 
 logger = logging.getLogger(__name__)
 
@@ -54,8 +54,9 @@ def book_graph_node(state: Dict[str, Any]) -> Dict[str, Any]:
         # 工程化流水线架构：直接从状态获取book_id，不依赖内存中的merged_kg
         book_id = state.get("book_id")
         if not book_id:
-            # 如果kg_builder没有设置book_id，生成一个fallback
-            book_id = generate_book_id(topic, thread_id)
+            # 如果kg_builder没有设置book_id，生成一个fallback（按IMPROOVE_GUIDE.md规范）
+            language = state.get("language", "zh")
+            book_id = generate_book_id(topic, language)
             logger.warning(f"kg_builder未设置book_id，生成fallback: {book_id}")
         else:
             logger.info(f"使用kg_builder设置的book_id: {book_id}")
@@ -95,18 +96,29 @@ def book_graph_node(state: Dict[str, Any]) -> Dict[str, Any]:
             # 整本书scope - book_id已经包含"book:"前缀
             book_scope = book_id
             
+            # ✅ 按IMPROOVE_GUIDE.md第5.7节要求：从Section Scope转写为Book Scope
+            logger.info(f"开始整书级合并：从Section Scope -> Book Scope: {book_scope}")
+            
             # 清理旧的整本书关系
             edges_deleted = store.delete_edges_by_scope(book_scope)
             book_stats["edges_deleted"] = edges_deleted
             logger.info(f"清理旧整本书关系: {edges_deleted} 条")
             
-            # 新策略：从Neo4j中读取section数据并重新标记为book_scope
-            logger.info(f"开始从Neo4j读取section数据并重新标记为book_scope")
+            # ✅ 步骤1: 节点合并（在聚合边之前）
+            logger.info("步骤1: 开始节点合并...")
+            merger = BookMerger(store)
+            consolidation_result = merger.consolidate_nodes(book_id, section_ids)
             
-            # 获取所有section的边数据 - 使用直接的Neo4j客户端
-            section_edges = []
+            if consolidation_result.get("success"):
+                logger.info(f"节点合并完成: 合并了 {consolidation_result.get('merged_count', 0)} 组节点")
+                logger.info(f"节点映射关系: {len(consolidation_result.get('node_mapping', {}))} 个节点被重定向")
+            else:
+                logger.warning(f"节点合并失败: {consolidation_result.get('error')}")
             
-            # 创建独立的Neo4j客户端进行查询
+            # 获取节点映射表（用于边的重定向）
+            node_mapping = consolidation_result.get("node_mapping", {})
+            
+            # ✅ 步骤2: 从Neo4j中读取所有section数据并转写为book scope
             from app.infrastructure.graph_store.neo4j_client import create_neo4j_client
             from app.core.settings import get_settings
             
@@ -125,56 +137,68 @@ def book_graph_node(state: Dict[str, Any]) -> Dict[str, Any]:
                 logger.error("无法创建Neo4j查询客户端")
                 edges_written = 0
             else:
+                # 聚合所有section的边数据
+                section_edges = []
                 for section_id in section_ids:
                     try:
-                        # 查询该section的所有边，直接获取属性
-                        section_scope = f"section:{section_id}"
+                        # section_id本身就是scope（纯哈希值，不需要前缀）
+                        section_scope = section_id
                         
-                        result = query_client.execute_cypher(
-                            """
-                            MATCH ()-[r]->() WHERE r.scope = $scope 
-                            RETURN r.type as type, r.source_id as source_id, r.target_id as target_id, 
-                                   r.confidence as confidence, r.weight as weight, r.desc as desc,
-                                   r.rid as old_rid, r.scope as old_scope
-                            """,
-                            {"scope": section_scope}
-                        )
-                        section_edges.extend(result)
-                        logger.info(f"从section {section_id} 读取到 {len(result)} 条边")
+                        # 查询该section scope下的所有关系
+                        query = """
+                            MATCH (source)-[r]->(target) WHERE r.scope = $scope
+                            RETURN r.type as type, source.id as source_id, target.id as target_id,
+                                   r.confidence as confidence, r.weight as weight, r.desc as desc
+                        """
+                        result = query_client.execute_cypher(query, {"scope": section_scope})
+                        
+                        if result:
+                            section_edges.extend(result)
+                            logger.info(f"从section {section_id} 读取到 {len(result)} 条边")
+                        else:
+                            logger.warning(f"从section {section_id} 读取到 0 条边")
                     except Exception as e:
-                        logger.error(f"读取section {section_id} 数据失败: {e}")
+                        logger.error(f"读取section {section_id} 数据失败: {e}", exc_info=True)
                 
                 logger.info(f"总共读取到 {len(section_edges)} 条section边数据")
                 
-                # 节点在各个section中已经存储，不需要重复写入
+                # 节点已在section中存储，不需要重复写入（节点是全局共享的）
                 nodes_written = 0
                 
-                # 为每条边重新创建book_scope版本
+                # 为每条边创建book scope版本（按指南第5.7节去重）
                 edges_written = 0
-                from app.domain.kg.ids import generate_relation_rid
-            
+                edge_fingerprints = set()  # 用于去重
+                
                 for edge_data in section_edges:
                     try:
-                        # edge_data是字典，包含从Cypher查询返回的字段
-                        # 创建新的book_scope边
+                        # 创建边的指纹用于去重（按rid逻辑）
+                        edge_type = edge_data.get("type", "")
+                        source_id = edge_data.get("source_id", "")
+                        target_id = edge_data.get("target_id", "")
+                        
+                        # ✅ 应用节点映射：将旧节点ID重定向到合并后的节点ID
+                        source_id = node_mapping.get(source_id, source_id)
+                        target_id = node_mapping.get(target_id, target_id)
+                        
+                        # 生成book scope下的rid
+                        rid = generate_relation_rid(edge_type, source_id, target_id, book_scope)
+                        
+                        # 去重
+                        if rid in edge_fingerprints:
+                            continue
+                        edge_fingerprints.add(rid)
+                        
+                        # 创建book scope边
                         edge_copy = {
-                            "type": edge_data.get("type", ""),
-                            "source_id": edge_data.get("source_id", ""),
-                            "target_id": edge_data.get("target_id", ""),
+                            "type": edge_type,
+                            "source_id": source_id,
+                            "target_id": target_id,
                             "desc": edge_data.get("desc", ""),
                             "confidence": edge_data.get("confidence", 0.8),
                             "weight": edge_data.get("weight", 1.0),
-                            "scope": book_scope,  # 新的book scope
-                            # 不设置src，因为这是整书级别的关系
+                            "scope": book_scope,
+                            "rid": rid
                         }
-                        
-                        # 生成新的rid
-                        edge_copy["rid"] = generate_relation_rid(
-                            edge_copy["type"], 
-                            edge_copy["source_id"], 
-                            edge_copy["target_id"], 
-                            book_scope
-                        )
                         
                         if store.merge_edge(edge_copy):
                             edges_written += 1
@@ -182,10 +206,11 @@ def book_graph_node(state: Dict[str, Any]) -> Dict[str, Any]:
                         logger.error(f"处理边数据失败: {e}")
                         continue
                     
+            book_stats["nodes_written"] = nodes_written
             book_stats["edges_written"] = edges_written
             book_stats["success"] = True
             
-            logger.info(f"整本书图谱存储完成: {nodes_written} 节点, {edges_written} 边")
+            logger.info(f"整本书图谱合并完成: {nodes_written} 节点, {edges_written} 边")
             
         except Exception as e:
             book_stats["error"] = str(e)

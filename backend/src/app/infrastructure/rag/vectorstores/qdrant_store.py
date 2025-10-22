@@ -64,20 +64,17 @@ class QdrantStore:
             raise
     
     def _ensure_collection_exists(self):
-        """确保集合存在，如果不存在则创建"""
+        """确保集合存在；不再自动按默认维度创建，避免维度不匹配"""
         try:
-            # 检查集合是否存在
             collections = self._client.get_collections()
             collection_names = [col.name for col in collections.collections]
-            
             if self.collection_name not in collection_names:
-                self.logger.info(f"集合 {self.collection_name} 不存在，自动创建...")
-                # 使用默认向量维度创建集合（可以从配置获取）
-                default_vector_size = 768  # 常见的embedding维度
-                self.create_collection(vector_size=default_vector_size, distance="cosine")
-                
+                # 仅警告，不自动创建；应由索引阶段显式创建以确保维度正确
+                self.logger.warning(
+                    f"集合 {self.collection_name} 不存在。请先在索引阶段创建以匹配实际向量维度。"
+                )
         except Exception as e:
-            self.logger.warning(f"检查/创建集合失败: {e}")
+            self.logger.warning(f"检查集合失败: {e}")
     
     def create_collection(self, vector_size: int, distance: str = "cosine", force_recreate: bool = False) -> bool:
         """
@@ -152,12 +149,18 @@ class QdrantStore:
                     self.logger.warning(f"文档缺少向量字段: {vector_field}")
                     continue
                 
-                # 生成ID（如果没有提供）
-                point_id = doc.get(id_field) or str(uuid.uuid4())
+                # 获取chunk_id并转换为UUID
+                chunk_id_str = doc.get(id_field) or str(uuid.uuid4())
                 
-                # 构建payload（排除向量字段）
+                # Qdrant要求ID必须是UUID或无符号整数，所以将字符串ID转换为UUID
+                # 使用uuid5确保相同的chunk_id总是生成相同的UUID（幂等性）
+                point_id = str(uuid.uuid5(uuid.NAMESPACE_DNS, chunk_id_str))
+                
+                # 构建payload（排除向量字段，但保留原始chunk_id）
                 payload = {k: v for k, v in doc.items() if k != vector_field}
                 payload["created_at"] = datetime.now().isoformat()
+                # 保存原始chunk_id到payload，以便后续检索时使用
+                payload["original_chunk_id"] = chunk_id_str
                 
                 # 创建Point
                 point = self._PointStruct(
@@ -298,14 +301,16 @@ class QdrantStore:
         """
         try:
             info = self._client.get_collection(self.collection_name)
+            # 兼容不同客户端版本的字段
+            vectors_cfg = getattr(getattr(info.config, 'params', {}), 'vectors', None)
             return {
-                "name": info.config.params.vectors.size if hasattr(info.config.params, 'vectors') else 0,
-                "vector_size": info.config.params.vectors.size if hasattr(info.config.params, 'vectors') else 0,
-                "distance": str(info.config.params.vectors.distance) if hasattr(info.config.params, 'vectors') else "unknown",
-                "points_count": info.points_count,
-                "segments_count": info.segments_count,
-                "disk_data_size": info.disk_data_size,
-                "ram_data_size": info.ram_data_size,
+                "name": self.collection_name,
+                "vector_size": getattr(vectors_cfg, 'size', 0) if vectors_cfg else 0,
+                "distance": str(getattr(vectors_cfg, 'distance', 'unknown')) if vectors_cfg else "unknown",
+                "points_count": getattr(info, 'points_count', None),
+                "segments_count": getattr(info, 'segments_count', None),
+                "disk_data_size": getattr(info, 'disk_data_size', None),
+                "ram_data_size": getattr(info, 'ram_data_size', None),
             }
         except Exception as e:
             self.logger.error(f"获取集合信息失败: {e}")

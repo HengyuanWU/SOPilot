@@ -4,8 +4,9 @@
 基础设施：Neo4j 图存储实现
 
 职责：
-- 基于 core.kg_store.neo4j_client 提供的 Neo4jClient 封装 KGStore 接口
-- 供域层 KGPipeline 直接依赖（不再依赖 modules.*）
+- 基于 Neo4jClient 封装 KGStore 接口
+- 供域层 KGPipeline 直接依赖
+- 已迁移到使用 neomodel 统一网关
 """
 
 from __future__ import annotations
@@ -18,6 +19,10 @@ from ...domain.kg.store import KGStore
 
 
 logger = logging.getLogger(__name__)
+
+
+# 注意：Neo4jStore 统一网关已迁移到 neomodel_store.py
+# 如需使用 Neo4jStore，请从 .neomodel_store import Neo4jStore
 
 
 class Neo4jKGStore:
@@ -92,21 +97,28 @@ def fetch_section_graph(section_id: str) -> Optional[Dict[str, Any]]:
         if not store:
             return None
 
-        # 查询边（带全部属性）
+        # 查询边（带全部属性，包括source_id和target_id）
         edges_query = (
-            "MATCH ()-[r]->() WHERE r.src = $section_id "
-            "RETURN properties(r) AS edge"
+            "MATCH (source)-[r]->(target) WHERE r.src = $section_id "
+            "RETURN properties(r) AS edge, source.id AS source_id, target.id AS target_id"
         )
         edge_rows: List[Dict[str, Any]] = store.client.execute_cypher(edges_query, {"section_id": section_id}) or []
-        edges: List[Dict[str, Any]] = [row.get("edge", {}) for row in edge_rows if isinstance(row.get("edge"), dict)]
+        # 将source_id和target_id添加到边属性中
+        edges: List[Dict[str, Any]] = []
+        for row in edge_rows:
+            if isinstance(row.get("edge"), dict):
+                edge = dict(row["edge"])
+                edge["source_id"] = row.get("source_id")
+                edge["target_id"] = row.get("target_id")
+                edges.append(edge)
 
         if not edges:
             return {"section_id": section_id, "nodes": [], "edges": [], "stats": {"total_nodes": 0, "total_edges": 0}}
 
-        # 依据边上的 source_id/target_id 查询节点属性
+        # 依据边上的起点和终点ID查询节点属性
         nodes_query = (
-            "MATCH ()-[r]->() WHERE r.src = $section_id "
-            "WITH collect(DISTINCT r.source_id) + collect(DISTINCT r.target_id) AS ids "
+            "MATCH (source)-[r]->(target) WHERE r.src = $section_id "
+            "WITH collect(DISTINCT source.id) + collect(DISTINCT target.id) AS ids "
             "UNWIND ids AS nid MATCH (n {id: nid}) "
             "RETURN DISTINCT properties(n) AS node"
         )
@@ -148,22 +160,29 @@ def fetch_book_graph(book_id: str) -> Optional[Dict[str, Any]]:
         
         logger.info(f"查询book graph - book_id: {book_id}, scope: {scope}")
         
-        # 查询边（带全部属性）
+        # 查询边（带全部属性，包括source_id和target_id）
         edges_query = (
-            "MATCH ()-[r]->() WHERE r.scope = $scope "
-            "RETURN properties(r) AS edge"
+            "MATCH (source)-[r]->(target) WHERE r.scope = $scope "
+            "RETURN properties(r) AS edge, source.id AS source_id, target.id AS target_id"
         )
         edge_rows: List[Dict[str, Any]] = store.client.execute_cypher(edges_query, {"scope": scope}) or []
         logger.info(f"查询到 {len(edge_rows)} 条边数据")
-        edges: List[Dict[str, Any]] = [row.get("edge", {}) for row in edge_rows if isinstance(row.get("edge"), dict)]
+        # 将source_id和target_id添加到边属性中
+        edges: List[Dict[str, Any]] = []
+        for row in edge_rows:
+            if isinstance(row.get("edge"), dict):
+                edge = dict(row["edge"])
+                edge["source_id"] = row.get("source_id")
+                edge["target_id"] = row.get("target_id")
+                edges.append(edge)
 
         if not edges:
             return {"book_id": book_id, "nodes": [], "edges": [], "stats": {"total_nodes": 0, "total_edges": 0}}
 
-        # 依据边上的 source_id/target_id 查询节点属性
+        # 依据边上的起点和终点ID查询节点属性
         nodes_query = (
-            "MATCH ()-[r]->() WHERE r.scope = $scope "
-            "WITH collect(DISTINCT r.source_id) + collect(DISTINCT r.target_id) AS ids "
+            "MATCH (source)-[r]->(target) WHERE r.scope = $scope "
+            "WITH collect(DISTINCT source.id) + collect(DISTINCT target.id) AS ids "
             "UNWIND ids AS nid MATCH (n {id: nid}) "
             "RETURN DISTINCT properties(n) AS node"
         )

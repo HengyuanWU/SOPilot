@@ -76,13 +76,14 @@ class VectorRetriever:
                 payload = result.payload
                 
                 # 提取必要字段
-                chunk_id = payload.get("chunk_id", result.id)
+                # 优先使用original_chunk_id（从payload中），否则使用chunk_id或UUID
+                chunk_id = payload.get("original_chunk_id") or payload.get("chunk_id", result.id)
                 doc_id = payload.get("doc_id", "unknown")
                 text = payload.get("text", "")
                 
                 # 构建元数据（排除主要字段）
                 meta = {k: v for k, v in payload.items() 
-                       if k not in ["chunk_id", "doc_id", "text"]}
+                       if k not in ["chunk_id", "doc_id", "text", "original_chunk_id"]}
                 
                 results.append(VectorRetrievalResult(
                     chunk_id=chunk_id,

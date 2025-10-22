@@ -27,10 +27,16 @@ class KGBuilder:
         初始化KG构建器
         
         Args:
-            config: KG流水线配置
+            config: KG流水线配置（可选，未使用）
         """
         self.config = config or {}
-        self.pipeline = KGPipeline(self.config)
+        
+        # 按照IMPROOVE_GUIDE.md第3.2节要求，KGPipeline只需要settings参数
+        from ...core.settings import get_settings
+        settings = get_settings()
+        
+        # 创建KGPipeline（IMPROOVE_GUIDE.md规范：只传settings）
+        self.pipeline = KGPipeline(settings)
         
     def build_knowledge_graph(
         self,
@@ -100,8 +106,8 @@ class KGBuilder:
                     logger.warning(f"子章节 {current_subchapter_title} 存储失败: {store_stats.get('error', '未知错误')}")
             
             # 生成book_id并进行书籍级别合并 
-            # 使用固定的run_id以确保同一主题的book_id一致
-            book_id = generate_book_id(topic, f"{topic}_{language}")
+            # 使用主题的MD5哈希以确保同一主题的book_id一致（严格按IMPROOVE_GUIDE.md）
+            book_id = generate_book_id(topic, language)
             
             if len(content) > 1 and all_section_ids:
                 logger.info(f"执行书籍级别合并: {book_id}")

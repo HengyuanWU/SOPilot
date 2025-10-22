@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import os
 from functools import lru_cache
-from typing import Dict, List, Optional, Union, Any
+from typing import Dict, List, Optional, Union, Any, Literal
 
 from pydantic import BaseModel, Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
@@ -55,7 +55,7 @@ class QdrantSettings(BaseModel):
 
 class RAGSettings(BaseModel):
     base_dir: str = "knowledge_base"
-    embed_model: str = "BAAI/bge-small-zh-v1.5"
+    embed_model: str = "BAAI/bge-m3"  # SiliconFlow支持的embedding模型（1024维）
     embed_provider: str = "siliconflow"  # embedding模型提供商
     chunk_size: int = 800
     chunk_overlap: int = 120
@@ -67,6 +67,8 @@ class RAGSettings(BaseModel):
     beta: float = 0.3   # KG检索权重
     hop: int = 2        # KG跳数限制
     rel_types: List[str] = Field(default_factory=list)  # KG关系类型白名单
+
+
 
 
 class AppSettings(BaseSettings):
@@ -92,6 +94,23 @@ class AppSettings(BaseSettings):
     # RAG 配置
     qdrant: QdrantSettings = Field(default_factory=QdrantSettings)
     rag: RAGSettings = Field(default_factory=RAGSettings)
+    
+    # —— KG 配置（按IMPROOVE_GUIDE.md严格要求的固定键名）——
+    KG_ENABLED: bool = True
+    KG_LANGUAGE: Literal['zh', 'en'] = 'zh'
+    KG_MIN_TERM_LEN: int = 2            # 概念最小字符数
+    KG_RE_MIN_CONF: float = 0.55        # RE 最小置信度（LLM 输出中的 confidence 字段低于此阈值丢弃）
+    KG_LINK_MIN_SIM: float = 0.82       # 链接相似度（Embedding 相似度阈值）
+    KG_LINK_TOPK: int = 3
+    KG_MAX_WORKERS: int = 50            # 并发与批量
+    KG_TX_BATCH_SIZE: int = 256
+    KG_RE_PROVIDER: str = 'llm'         # 关系抽取统一使用通用 LLM
+    KG_RE_MODEL: str = 'Qwen/Qwen2.5-7B-Instruct'
+    KG_EMBEDDING_MODEL: str = 'BAAI/bge-m3'  # 实体链接使用的向量模型（API 侧实现）
+    
+    # —— Neo4j / neomodel 连接（KG 模块专用）——
+    NEO4J_BOLT_URL: str = 'bolt://neo4j:test1234@neo4j:7687'  # 形如 bolt://user:pass@host:7687
+    NEO4J_MAX_CONNECTION_LIFETIME: int = 3600
 
     # ENV 优先（允许使用 backend/.env 本地文件）
     model_config = SettingsConfigDict(

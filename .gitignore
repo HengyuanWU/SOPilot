@@ -84,4 +84,15 @@ build/
 .tmp/
 
 # TypeScript
-*.tsbuildinfo 
+*.tsbuildinfo
+
+# Cursor IDE
+.cursor/
+
+# Project specific
+backend_logs*.txt
+check_spacy.py
+scripts/
+
+# Knowledge base data
+knowledge_base/ 

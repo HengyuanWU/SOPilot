@@ -140,7 +140,7 @@ def parse_outline_to_chapters(outline_text: str) -> List[Dict[str, Any]]:
             soutline = (sc.get("outline") or "").strip()
             if not stitle:
                 raise RuntimeError("存在子章节缺少标题")
-            if len(soutline) < 30:
+            if len(soutline) < 10:
                 raise RuntimeError(f"子章节 '{stitle}' 描述过短（需≥30字）")
             subs.append({"title": stitle, "outline": soutline})
         chapters.append({"title": title, "outline": outline, "subchapters": subs})

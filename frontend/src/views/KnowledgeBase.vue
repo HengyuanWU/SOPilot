@@ -177,7 +177,8 @@ async function loadDocuments() {
   try {
     const response = await fetch('/api/v1/rag/docs')
     if (response.ok) {
-      documents.value = await response.json()
+      const data = await response.json()
+      documents.value = data.documents || []
     }
   } catch (error) {
     console.error('加载文档列表失败:', error)
@@ -206,6 +207,7 @@ async function uploadFiles(event: Event) {
       
       const formData = new FormData()
       formData.append('files', file)
+      formData.append('auto_index', 'true')  // 上传后自动索引
       
       const response = await fetch('/api/v1/rag/docs', {
         method: 'POST',

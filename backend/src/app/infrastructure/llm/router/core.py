@@ -33,6 +33,7 @@ class LLMRouter:
     
     def __init__(self):
         self._adapters: Dict[str, BaseLLMAdapter] = {}
+        self.logger = logging.getLogger(__name__)
         self._register_default_adapters()
         
     def _register_default_adapters(self):
@@ -121,6 +122,127 @@ class LLMRouter:
                 e
             )
     
+    def generate_embedding_batch(self, request: LLMRequest) -> LLMResponse:
+        """
+        批量生成文本嵌入向量
+        
+        Args:
+            request: LLM请求，包含待嵌入的文本列表（input_texts字段）
+            
+        Returns:
+            包含embedding向量列表的响应
+            
+        Raises:
+            LLMException: API调用失败时抛出
+        """
+        start_time = time.time()
+        
+        try:
+            # 验证请求
+            if not hasattr(request, 'input_texts') or not request.input_texts:
+                raise ValueError("批量Embedding请求必须包含input_texts字段")
+            
+            # 获取适配器
+            adapter = self.get_adapter(request.provider)
+            
+            # 检查适配器是否支持批量embedding
+            if not hasattr(adapter, 'generate_embedding_batch'):
+                raise LLMException(
+                    f"Provider {request.provider} does not support batch embedding",
+                    "unsupported_operation",
+                    request.provider
+                )
+            
+            # 调用适配器的批量embedding方法
+            response = adapter.generate_embedding_batch(request)
+            
+            # 设置延迟
+            latency_ms = int((time.time() - start_time) * 1000)
+            if response:
+                response.latency_ms = latency_ms
+            
+            logger.info(
+                f"批量Embedding成功: provider={request.provider}, "
+                f"model={request.model}, count={len(request.input_texts)}, latency={latency_ms}ms"
+            )
+            
+            return response
+            
+        except Exception as e:
+            latency_ms = int((time.time() - start_time) * 1000)
+            # 使用module-level logger以避免异常处理中的潜在问题
+            logger.error(
+                f"批量Embedding失败: provider={request.provider}, "
+                f"model={request.model}, error={str(e)}, latency={latency_ms}ms"
+            )
+            raise LLMException(
+                f"批量Embedding失败: {str(e)}",
+                "embedding_error",
+                request.provider
+            )
+    
+    def generate_embedding(self, request: LLMRequest) -> LLMResponse:
+        """
+        生成文本嵌入向量（IMPROOVE_GUIDE.md第5.4节要求）
+        
+        专门用于embedding API调用，支持实体链接中的向量相似度计算
+        
+        Args:
+            request: LLM请求，包含待嵌入的文本
+            
+        Returns:
+            包含embedding向量的响应
+            
+        Raises:
+            LLMException: API调用失败时抛出
+        """
+        start_time = time.time()
+        
+        try:
+            # 验证请求
+            if not hasattr(request, 'input_text') or not request.input_text:
+                raise ValueError("Embedding请求必须包含input_text字段")
+            
+            # 获取适配器
+            adapter = self.get_adapter(request.provider)
+            
+            # 检查适配器是否支持embedding
+            if not hasattr(adapter, 'generate_embedding'):
+                raise LLMException(
+                    f"Provider {request.provider} does not support embedding",
+                    "unsupported_operation",
+                    request.provider,
+                    False
+                )
+            
+            # 记录请求
+            logger.debug(f"Embedding request: provider={request.provider}, model={request.model}, text_length={len(request.input_text)}")
+            
+            # 执行embedding
+            response = adapter.generate_embedding(request)
+            
+            # 添加延迟信息
+            response.latency_ms = int((time.time() - start_time) * 1000)
+            
+            # 记录响应
+            logger.debug(f"Embedding response: provider={request.provider}, vector_dim={len(response.embedding) if hasattr(response, 'embedding') else 0}")
+            
+            return response
+            
+        except LLMException:
+            # 重新抛出LLM异常
+            raise
+        except Exception as e:
+            # 包装意外异常
+            logger.error(f"Embedding API调用失败: {e}", exc_info=True)
+            raise LLMException(
+                f"Embedding调用失败: {str(e)}", 
+                "embedding_error", 
+                request.provider,
+                False,
+                e
+            )
+
     def generate_with_retry(self, request: LLMRequest, max_retries: int = 3,
                            base_delay: float = 1.0, max_delay: float = 60.0) -> LLMResponse:
         """

@@ -21,7 +21,17 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 
 # Backend deps
 COPY backend/requirements.txt /app/backend/requirements.txt
-RUN pip install --no-cache-dir -r /app/backend/requirements.txt
+RUN pip install --upgrade pip
+RUN pip config set global.index-url https://pypi.tuna.tsinghua.edu.cn/simple && \
+    pip config set global.extra-index-url https://pypi.org/simple
+RUN pip install --no-cache-dir \
+    -i https://pypi.tuna.tsinghua.edu.cn/simple \
+    --extra-index-url https://pypi.org/simple \
+    -r /app/backend/requirements.txt
+
+# spaCy models installation (IMPROOVE_GUIDE.md Section 2.1 requirement)
+RUN python -m spacy download zh_core_web_sm || echo "zh_core_web_sm download failed, will use blank model"
+RUN python -m spacy download en_core_web_sm || echo "en_core_web_sm download failed, will use blank model"
 
 # App code
 COPY backend/src /app/backend/src
