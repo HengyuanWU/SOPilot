@@ -18,9 +18,10 @@ logger = logging.getLogger(__name__)
 
 
 class RAGService:
-    """RAG服务类"""
+    """RAG服务类 - LangChain 实现"""
     
     def __init__(self):
+        """初始化 RAG 服务"""
         self.logger = logging.getLogger(__name__)
         self._pipeline: Optional[RAGPipeline] = None
     
@@ -286,7 +287,7 @@ class RAGService:
 
 @lru_cache()
 def create_rag_pipeline() -> RAGPipeline:
-    """创建RAG管线实例（缓存）"""
+    """创建原始RAG管线实例（缓存）"""
     settings = get_settings()
     
     config = RAGConfig(
@@ -308,9 +309,9 @@ def create_rag_pipeline() -> RAGPipeline:
         kg_rel_types=settings.rag.rel_types or [],
     )
     
-    logger.info("创建RAG管线实例")
+    logger.info("创建原始RAG管线实例")
     return RAGPipeline(config)
 
 
-# 全局RAG服务实例
+# 全局RAG服务实例（LangChain 实现）
 rag_service = RAGService()

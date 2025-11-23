@@ -1,9 +1,10 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-Vector Retriever - 向量检索器
+Vector Retriever - 向量检索器 (DEPRECATED)
 
-基于Qdrant的向量检索功能
+警告：此模块已弃用，新代码应使用 LangChain 的 vector store retriever。
+保留此文件仅用于向后兼容。
 """
 
 import logging
@@ -11,7 +12,9 @@ from typing import List, Dict, Any, Optional
 from dataclasses import dataclass
 
 from ..vectorstores.qdrant_store import QdrantStore, VectorSearchResult
-from ..embedder import Embedder
+
+# Note: Embedder 已被 LangChain embeddings 替代
+# 为了向后兼容，此文件保留但不应在新代码中使用
 
 logger = logging.getLogger(__name__)
 
@@ -27,19 +30,20 @@ class VectorRetrievalResult:
 
 
 class VectorRetriever:
-    """向量检索器"""
+    """向量检索器 (DEPRECATED - 使用 LangChain retrievers)"""
     
-    def __init__(self, qdrant_store: QdrantStore, embedder: Embedder):
+    def __init__(self, qdrant_store: QdrantStore, embedder: Any = None):
         """
         初始化向量检索器
         
         Args:
             qdrant_store: Qdrant存储实例
-            embedder: 嵌入器实例
+            embedder: 嵌入器实例 (已弃用，保留参数仅用于兼容)
         """
         self.qdrant_store = qdrant_store
         self.embedder = embedder
         self.logger = logging.getLogger(__name__)
+        self.logger.warning("VectorRetriever已弃用，请使用 LangChain vector store retrievers")
     
     def search(self, query: str, top_k: int = 10, score_threshold: Optional[float] = None, 
                filters: Optional[Dict[str, Any]] = None) -> List[VectorRetrievalResult]:

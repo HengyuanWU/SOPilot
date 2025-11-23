@@ -324,25 +324,9 @@ class LLMService:
             # 调用LLM
             response = self.llm_router.generate(request)
             
-            # 解析JSON响应
-            import json
-            try:
-                result = json.loads(response.content.strip())
-                return result
-            except json.JSONDecodeError:
-                # 如果JSON解析失败，尝试从响应中提取JSON
-                import re
-                json_match = re.search(r'\{.*\}', response.content, re.DOTALL)
-                if json_match:
-                    try:
-                        result = json.loads(json_match.group())
-                        return result
-                    except:
-                        pass
-                
-                # 解析失败，返回空结果
-                logger.warning(f"Failed to parse structured LLM response: {response.content}")
-                return {"relations": []}
+            # 使用 LangChain parser 解析响应（替代手动JSON解析）
+            from ..infrastructure.llm.parsers import parse_kg_relations
+            return parse_kg_relations(response.content)
                 
         except Exception as e:
             logger.error(f"Structured LLM call failed: {e}")

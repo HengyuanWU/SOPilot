@@ -2,6 +2,16 @@
 
 一个基于多智能体协作的现代化教材生成平台，通过 **7个专业化智能体**（规划、研究、写作、验证、QA生成、知识图谱构建、内容合并）的协同工作，自动生成高质量的教育内容并构建结构化知识图谱。
 
+## 📚 完整文档
+
+**查看 [文档中心](docs/README.md) 获取完整的技术文档和使用指南**
+
+快速链接：
+- [LangChain RAG 集成指南](docs/LangChain_Integration.md) - 检索增强生成系统
+- [知识图谱完整指南](docs/KG_Knowledge_Graph_Guide.md) - Neo4j + Neomodel
+- [Embedding 系统指南](docs/Embedding_System_Guide.md) - 文本嵌入和向量化
+- [项目架构文档](docs/项目架构文档.md) - 详细架构说明
+
 ## ✨ 核心特性
 
 - 🤖 **多智能体协作**：7个专业化智能体流水线协作
@@ -22,7 +32,9 @@
 - **Pydantic 2.9.2** - 数据验证和序列化
 - **LangGraph** - 工作流编排引擎，支持多智能体协作
 - **LangChain Core** - LLM抽象层和提供商集成
+- **LangChain RAG** - 检索增强生成系统（Embeddings, VectorStore, Retrievers）
 - **Neo4j 5.23.1** - 图数据库驱动，知识图谱存储
+- **Qdrant** - 向量数据库，用于语义检索
 - **Jinja2 3.1.4** - 模板引擎，用于Prompt渲染
 
 **前端技术栈：**
@@ -668,7 +680,7 @@ MIT License - 详见 `LICENSE` 文件
 - [x] **知识图谱可视化** - 基于Cytoscape.js的交互式展示
 - [x] **Prompt工程化管理** - YAML-based模板系统
 - [x] **多工作流支持** - 可扩展的工作流框架
-- [ ] **RAG集成** - 混合检索增强生成系统
+- [x] **RAG集成** - 基于 LangChain 的混合检索增强生成系统 ✨
 - [ ] **性能优化** - 大规模并发和缓存优化
 
 ### 中期目标 (Q2-Q3 2025)

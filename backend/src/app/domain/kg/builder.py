@@ -27,7 +27,7 @@ logger = logging.getLogger(__name__)
 # 关系枚举
 RELATION_TYPES = {
     "DEFINES", "EXPLAINS", "REQUIRES", "SIMILAR_TO", 
-    "CONTRASTS_WITH", "IMPLEMENTS", "PART_OF"
+    "CONTRASTS_WITH", "IMPLEMENTS", "PART_OF", "RELATES_TO"
 }
 
 # 中文关系映射表
@@ -42,6 +42,9 @@ RELATION_MAPPING = {
     "实现": "IMPLEMENTS",
     "包含": "PART_OF",
     "组成": "PART_OF",
+    "关联": "RELATES_TO",
+    "相关": "RELATES_TO",
+    "涉及": "RELATES_TO",
     # 英文小写
     "defines": "DEFINES",
     "explains": "EXPLAINS",
@@ -50,6 +53,8 @@ RELATION_MAPPING = {
     "contrasts with": "CONTRASTS_WITH",
     "implements": "IMPLEMENTS",
     "part of": "PART_OF",
+    "relates to": "RELATES_TO",
+    "relates_to": "RELATES_TO",
 }
 
 

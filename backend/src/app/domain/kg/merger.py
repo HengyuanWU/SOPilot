@@ -32,6 +32,7 @@ RELATION_TYPES = [
     "CONTRASTS_WITH",
     "IMPLEMENTS",
     "PART_OF",
+    "RELATES_TO",
 ]
 
 
@@ -286,32 +287,28 @@ class BookMerger:
         """查询所有 Concept 节点。
         
         Args:
-            section_ids: 可选的 section ID 列表，用于过滤节点范围
+            section_ids: 可选的 section ID 列表（已废弃，不再用于过滤）
             
         Returns:
             节点列表，每个节点包含 {id, name, aliases, desc}
+            
+        Note:
+            节点是全局共享的，不依赖关系存在。即使关系创建失败，节点仍然存在。
+            因此不再通过关系过滤节点，直接查询所有Concept节点。
         """
-        # 如果提供了 section_ids，则通过关系过滤节点
-        # 这样可以只处理与特定 section 相关的节点，提升性能
-        if section_ids:
-            query = """
-            MATCH (n:Concept)-[r]-()
-            WHERE r.scope IN $section_ids OR r.src IN $section_ids
-            RETURN DISTINCT n.id AS id, n.name AS name, 
-                   n.aliases AS aliases, n.desc AS desc
-            """
-            params = {"section_ids": section_ids}
-        else:
-            # 查询所有 Concept 节点
-            query = """
-            MATCH (n:Concept)
-            RETURN n.id AS id, n.name AS name, 
-                   n.aliases AS aliases, n.desc AS desc
-            """
-            params = {}
+        # 直接查询所有 Concept 节点（节点是全局的，不依赖关系存在）
+        # 即使关系解析失败，节点仍然存在，应该能被查询到
+        query = """
+        MATCH (n:Concept)
+        RETURN n.id AS id, n.name AS name, 
+               n.aliases AS aliases, n.desc AS desc
+        """
+        params = {}
         
         try:
+            logger.debug(f"查询Concept节点: section_ids={section_ids} (已忽略，查询所有节点)")
             results = Neo4jStore.run_cypher(query, params)
+            logger.info(f"查询到 {len(results)} 个Concept节点")
             return results
         except Exception as e:
             logger.error(f"查询 Concept 节点失败: {e}", exc_info=True)

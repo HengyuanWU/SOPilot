@@ -5,14 +5,14 @@ from fastapi.staticfiles import StaticFiles
 import os
 
 from .core.logging import setup_logging
-from .core.lifecycle import register_lifecycle
+from .core.lifecycle import lifespan
 from .api.v1.router import api_router
 from .core.settings import settings_diagnostics
 
 
 def create_app() -> FastAPI:
     setup_logging()
-    app = FastAPI(title="SOPilot API", version="0.1.0")
+    app = FastAPI(title="SOPilot API", version="0.1.0", lifespan=lifespan)
     # CORS（最小允许，本地开发）
     app.add_middleware(
         CORSMiddleware,
@@ -22,7 +22,6 @@ def create_app() -> FastAPI:
         allow_headers=["*"],
     )
     app.include_router(api_router)
-    register_lifecycle(app)
     # 启动日志诊断（简要）
     try:
         diag = settings_diagnostics()

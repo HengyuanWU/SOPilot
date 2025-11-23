@@ -76,76 +76,14 @@ class Planner:
 
 
 def parse_outline_to_chapters(outline_text: str) -> List[Dict[str, Any]]:
-    """将 LLM 的 JSON 输出解析为内部章节结构。保持返回结构不变。"""
-    import json, re
-
-    def _extract_json_candidate(text: str) -> str:
-        if not isinstance(text, str):
-            raise RuntimeError("规划结果类型异常（非字符串）")
-        t = text.strip()
-        # 优先从 ```json 或 ``` 包围中提取
-        m = re.search(r"```json\s*(\{.*?\})\s*```", t, re.S | re.I)
-        if m:
-            return m.group(1).strip()
-        m = re.search(r"```\s*(\{.*?\})\s*```", t, re.S)
-        if m:
-            return m.group(1).strip()
-        # 退级：寻找第一个 { 到 最后一个 } 的子串，尝试解析
-        start = t.find('{')
-        end = t.rfind('}')
-        if start != -1 and end != -1 and end > start:
-            return t[start:end+1].strip()
-        # 特殊容错：仅返回了 "chapters": [...] 片段时，尝试提取 [] 并包装为对象
-        idx = t.find('"chapters"')
-        if idx != -1:
-            # 找到 chapters 后的第一个 '['，做括号配平
-            lb = t.find('[', idx)
-            if lb != -1:
-                depth = 0
-                for i in range(lb, len(t)):
-                    if t[i] == '[':
-                        depth += 1
-                    elif t[i] == ']':
-                        depth -= 1
-                        if depth == 0:
-                            arr = t[lb:i+1]
-                            return '{"chapters": ' + arr + '}'
-        # 最终失败
-        raise RuntimeError(f"未找到可解析的 JSON 片段：snippet={t[:120]!r}")
-
-    try:
-        candidate = _extract_json_candidate(outline_text)
-        data = json.loads(candidate)
-    except Exception as e:
-        raise RuntimeError(f"规划结果非 JSON 可解析格式: {e}")
-
-    chapters_in: List[Dict[str, Any]] = data.get("chapters") or []
-    if not isinstance(chapters_in, list) or not chapters_in:
-        raise RuntimeError("规划结果缺少 chapters 或为空")
-
-    chapters: List[ChapterDict] = []
-    for ch in chapters_in:
-        title = (ch.get("title") or "").strip()
-        outline = (ch.get("outline") or "").strip()
-        subs_in = ch.get("subchapters") or []
-        if not title:
-            raise RuntimeError("存在章节缺少标题")
-        if not outline:
-            raise RuntimeError(f"章节 '{title}' 缺少 outline")
-        if not isinstance(subs_in, list) or not subs_in:
-            raise RuntimeError(f"章节 '{title}' 未包含任何子章节")
-        subs: List[SubchapterDict] = []
-        for sc in subs_in:
-            stitle = (sc.get("title") or "").strip()
-            soutline = (sc.get("outline") or "").strip()
-            if not stitle:
-                raise RuntimeError("存在子章节缺少标题")
-            if len(soutline) < 10:
-                raise RuntimeError(f"子章节 '{stitle}' 描述过短（需≥30字）")
-            subs.append({"title": stitle, "outline": soutline})
-        chapters.append({"title": title, "outline": outline, "subchapters": subs})
-
-    return chapters
+    """
+    将 LLM 的 JSON 输出解析为内部章节结构。
+    
+    现在使用 LangChain PydanticOutputParser 替代手动JSON解析。
+    保持返回结构不变，确保向后兼容。
+    """
+    from ...infrastructure.llm.parsers import parse_textbook_outline
+    return parse_textbook_outline(outline_text)
 
 __all__ = ["Planner"]
 

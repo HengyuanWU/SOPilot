@@ -1,39 +1,35 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-RAG Pipeline - RAG系统统一管线
+RAG Pipeline - 完全基于 LangChain 组件的 RAG 管线
 
-按照IMPROOVE_GUIDE.md的双通道并行检索架构：
-- Qdrant向量检索（语义召回）+ Neo4j KG检索（结构关系）
-- Merger/Rerank → Prompt构造 → LLM
-
-统一对外接口：ingest / index / retrieve / test
+使用 LangChain 标准组件：
+1. LangChain Embeddings (SiliconFlowEmbeddings)
+2. LangChain Vector Store (LangChainQdrantStore)
+3. LangChain Retrievers (HybridRetriever)
+4. LangChain Text Splitters
 """
 
 import logging
-from typing import Dict, List, Any, Optional, Union, Tuple
+from typing import Dict, List, Any, Optional, Union
 from pathlib import Path
 from dataclasses import dataclass
-import asyncio
 
+from langchain_core.documents import Document
+
+from .embeddings import create_cached_embeddings
+from .vectorstore import LangChainQdrantStore, VectorStoreConfig
+from .retriever_factory import create_ensemble_retriever, documents_to_dict
 from .chunker import DocumentChunker, DocumentChunk
-from .embedder import Embedder
-from .vectorstores.qdrant_store import QdrantStore
-from .kgstores.neo4j_queries import Neo4jKGQueries
-from .kgstores.document_store import DocumentKGStore
-from .nlp.entity_extractor import EntityExtractor
-from .retrievers.retriever_vector import VectorRetriever
 from .retrievers.retriever_kg import KGRetriever
-from .merger import EvidenceMerger, MergedEvidence
-from .rerankers.bge_reranker import BGEReranker
-from .prompt_builder import PromptBuilder, PromptContext
+from .kgstores.neo4j_queries import Neo4jKGQueries
 
 logger = logging.getLogger(__name__)
 
 
 @dataclass
 class RAGConfig:
-    """RAG配置"""
+    """RAG 配置 - LangChain 实现"""
     # 基础配置
     base_dir: str = "knowledge_base"
     
@@ -41,13 +37,15 @@ class RAGConfig:
     chunk_size: int = 800
     chunk_overlap: int = 120
     
-    # 嵌入配置（基于API调用）
-    embed_model: str = "BAAI/bge-m3"  # SiliconFlow支持的embedding模型
-    embed_provider: str = "siliconflow"  # 嵌入模型提供商
+    # 嵌入配置
+    embed_model: str = "BAAI/bge-m3"
+    embed_provider: str = "siliconflow"
+    embed_cache_dir: Optional[str] = None  # None = 禁用缓存
     
     # Qdrant配置
     qdrant_url: str = "http://qdrant:6333"
     qdrant_collection: str = "kb_chunks"
+    qdrant_api_key: Optional[str] = None
     qdrant_distance: str = "cosine"
     
     # 检索配置
@@ -55,131 +53,152 @@ class RAGConfig:
     kg_top_k: int = 8
     final_top_k: int = 4
     
-    # 合并配置
-    alpha: float = 0.7  # 向量权重
-    beta: float = 0.3   # KG权重
-    
-    # 重排配置
-    use_reranker: bool = False
-    reranker_model: str = "BAAI/bge-reranker-base"
+    # 混合检索配置
+    vector_weight: float = 0.7
+    kg_weight: float = 0.3
+    enable_kg: bool = True
     
     # KG检索配置
     kg_hop: int = 2
     kg_rel_types: List[str] = None
     
-    # 提示构造配置
-    max_context_length: int = 4000
-    citation_style: str = "numbered"
+    # 向后兼容的旧配置字段（已废弃，但保留以避免破坏现有代码）
+    alpha: Optional[float] = None  # 已废弃，使用 vector_weight
+    beta: Optional[float] = None   # 已废弃，使用 kg_weight
+    use_reranker: bool = False  # 已废弃
+    reranker_model: str = "BAAI/bge-reranker-base"  # 已废弃
+    max_context_length: int = 4000  # 已废弃
+    citation_style: str = "numbered"  # 已废弃
 
 
 @dataclass
 class RAGRetrievalResult:
-    """RAG检索结果"""
+    """RAG 检索结果"""
     query: str
-    vector_hits: List[Dict[str, Any]]
-    kg_hits: List[Dict[str, Any]]
-    merged_evidence: List[MergedEvidence]
-    enhanced_prompt: Optional[PromptContext] = None
-    metadata: Dict[str, Any] = None
+    documents: List[Document]  # LangChain Document 对象
+    metadata: Dict[str, Any]
 
 
 class RAGPipeline:
-    """RAG系统主管线"""
+    """
+    基于 LangChain 的 RAG 管线
     
-    def __init__(self, config: RAGConfig = None):
+    完全使用 LangChain 组件重构，提供：
+    1. 标准化的 Embeddings、VectorStore、Retrievers
+    2. 简化的 API 和更好的可维护性
+    3. 更强的生态集成能力
+    """
+    
+    def __init__(self, config: Optional[RAGConfig] = None):
         """
-        初始化RAG管线
+        初始化 RAG 管线
         
         Args:
-            config: RAG配置
+            config: RAG 配置
         """
         self.config = config or RAGConfig()
         self.logger = logging.getLogger(__name__)
         
-        # 初始化各个组件
+        # 向后兼容：处理旧配置字段
+        if self.config.alpha is not None:
+            self.config.vector_weight = self.config.alpha
+        if self.config.beta is not None:
+            self.config.kg_weight = self.config.beta
+        
+        # 初始化组件
         self._init_components()
     
     def _init_components(self):
-        """初始化各个组件"""
+        """初始化所有组件"""
         try:
-            # 文档处理组件
+            self.logger.info("初始化 RAG 组件...")
+            
+            # 1. 文档分块器（使用 LangChain TextSplitter）
             self.chunker = DocumentChunker(
                 chunk_size=self.config.chunk_size,
                 chunk_overlap=self.config.chunk_overlap
             )
+            self.logger.info(f"✅ 文档分块器: chunk_size={self.config.chunk_size}")
             
-            self.embedder = Embedder(
+            # 2. Embeddings（使用 LangChain Embeddings + Cache）
+            self.embeddings = create_cached_embeddings(
                 model_name=self.config.embed_model,
-                provider=self.config.embed_provider
+                provider=self.config.embed_provider,
+                cache_dir=self.config.embed_cache_dir,
+                namespace=self.config.embed_model.replace("/", "_")
             )
+            self.logger.info(f"✅ Embeddings: model={self.config.embed_model}, cached={self.config.embed_cache_dir is not None}")
             
-            # 存储组件
-            self.qdrant_store = QdrantStore(
+            # 3. Vector Store（使用 LangChain Qdrant）
+            vector_config = VectorStoreConfig(
                 url=self.config.qdrant_url,
-                collection_name=self.config.qdrant_collection
+                api_key=self.config.qdrant_api_key,
+                collection_name=self.config.qdrant_collection,
+                distance=self.config.qdrant_distance
+            )
+            self.vector_store = LangChainQdrantStore(
+                embeddings=self.embeddings,
+                config=vector_config
+            )
+            self.logger.info(f"✅ Vector Store: collection={self.config.qdrant_collection}")
+            
+            # 4. KG 检索器（保留原有实现）
+            if self.config.enable_kg:
+                self.neo4j_queries = Neo4jKGQueries()
+                self.kg_retriever = KGRetriever(
+                    neo4j_queries=self.neo4j_queries
+                )
+                self.logger.info(f"✅ KG Retriever: enabled")
+            else:
+                self.kg_retriever = None
+                self.logger.info(f"⚠️  KG Retriever: disabled")
+            
+            # 5. 混合检索器（使用 LangChain Retriever）
+            vector_retriever = self.vector_store.as_retriever(
+                search_kwargs={"k": self.config.vector_top_k}
             )
             
-            self.neo4j_queries = Neo4jKGQueries()
-            self.document_store = DocumentKGStore(self.neo4j_queries._client)
-            self.entity_extractor = EntityExtractor()
-            
-            # 检索组件
-            self.vector_retriever = VectorRetriever(
-                qdrant_store=self.qdrant_store,
-                embedder=self.embedder
+            self.hybrid_retriever = create_ensemble_retriever(
+                vector_retriever=vector_retriever,
+                kg_retriever=self.kg_retriever if self.config.enable_kg else None,
+                vector_weight=self.config.vector_weight,
+                kg_weight=self.config.kg_weight,
+                top_k=self.config.final_top_k
             )
+            self.logger.info(f"✅ Hybrid Retriever: vector_weight={self.config.vector_weight}, kg_weight={self.config.kg_weight}")
             
-            self.kg_retriever = KGRetriever(
-                neo4j_queries=self.neo4j_queries
-            )
-            
-            # 合并和重排组件
-            self.evidence_merger = EvidenceMerger(
-                alpha=self.config.alpha,
-                beta=self.config.beta
-            )
-            
-            self.reranker = BGEReranker(
-                model_name=self.config.reranker_model,
-                enabled=self.config.use_reranker
-            )
-            
-            # 提示构造组件
-            self.prompt_builder = PromptBuilder(
-                max_context_length=self.config.max_context_length,
-                citation_style=self.config.citation_style
-            )
-            
-            self.logger.info("RAG管线组件初始化完成")
+            self.logger.info("🎉 RAG 组件初始化完成!")
             
         except Exception as e:
-            self.logger.error(f"RAG管线初始化失败: {e}")
+            self.logger.error(f"❌ RAG 组件初始化失败: {e}")
             raise
     
-    def ingest_documents(self, file_paths: List[Union[str, Path]], 
-                        doc_metadata: Dict[str, Any] = None) -> Dict[str, Any]:
+    def ingest_documents(
+        self,
+        file_paths: List[Union[str, Path]],
+        doc_metadata: Optional[Dict[str, Any]] = None
+    ) -> Dict[str, Any]:
         """
-        文档入库
+        文档入库（分块）
         
         Args:
             file_paths: 文档文件路径列表
             doc_metadata: 文档元数据
             
         Returns:
-            Dict[str, Any]: 入库结果统计
+            Dict[str, Any]: 入库统计
         """
         try:
             self.logger.info(f"开始文档入库: {len(file_paths)} 个文件")
             
             all_chunks = []
-            processing_stats = {
+            stats = {
                 "total_files": len(file_paths),
                 "processed_files": 0,
                 "total_chunks": 0,
                 "failed_files": [],
             }
             
-            # 1. 文档分块
             for file_path in file_paths:
                 try:
                     file_path = Path(file_path)
@@ -190,43 +209,51 @@ class RAGPipeline:
                     meta.update({
                         "filename": file_path.name,
                         "file_path": str(file_path),
+                        "doc_id": doc_id
                     })
                     
                     # 分块
                     chunks = self.chunker.chunk_file(file_path, doc_id, meta)
                     all_chunks.extend(chunks)
                     
-                    processing_stats["processed_files"] += 1
-                    self.logger.debug(f"文件分块完成: {file_path.name}, {len(chunks)} 个块")
+                    stats["processed_files"] += 1
+                    self.logger.debug(f"✅ {file_path.name}: {len(chunks)} 块")
                     
                 except Exception as e:
-                    self.logger.error(f"文件处理失败 {file_path}: {e}")
-                    processing_stats["failed_files"].append(str(file_path))
+                    self.logger.error(f"❌ 文件处理失败 {file_path}: {e}")
+                    stats["failed_files"].append(str(file_path))
             
-            processing_stats["total_chunks"] = len(all_chunks)
+            stats["total_chunks"] = len(all_chunks)
             
-            # 2. 保存分块结果
+            # 保存分块结果
             chunks_file = Path(self.config.base_dir) / "chunks" / "latest_chunks.jsonl"
+            chunks_file.parent.mkdir(parents=True, exist_ok=True)
             self.chunker.save_chunks_to_jsonl(all_chunks, chunks_file)
             
-            self.logger.info(f"文档入库完成: 处理 {processing_stats['processed_files']} 个文件，生成 {len(all_chunks)} 个分块")
-            return processing_stats
+            self.logger.info(
+                f"✅ 文档入库完成: {stats['processed_files']}/{stats['total_files']} 个文件, "
+                f"{stats['total_chunks']} 个分块"
+            )
+            return stats
             
         except Exception as e:
-            self.logger.error(f"文档入库失败: {e}")
+            self.logger.error(f"❌ 文档入库失败: {e}")
             raise
     
-    def index_documents(self, chunk_file: Union[str, Path] = None, 
-                       force_recreate: bool = False) -> Dict[str, Any]:
+    def index_documents(
+        self,
+        chunk_file: Optional[Union[str, Path]] = None,
+        force_recreate: bool = False
+    ) -> Dict[str, Any]:
         """
-        文档索引
+        文档索引（向量化并存入 Qdrant）
         
         Args:
-            chunk_file: 分块文件路径（如果为None，使用最新的分块文件）
+            chunk_file: 分块文件路径（None = 使用最新分块）
             force_recreate: 是否强制重新创建集合
             
         Returns:
-            Dict[str, Any]: 索引结果统计
+            Dict[str, Any]: 索引统计
         """
         try:
             # 确定分块文件
@@ -241,298 +268,190 @@ class RAGPipeline:
             
             # 1. 读取分块数据
             chunks_data = self._load_chunks_from_jsonl(chunk_file)
+            self.logger.info(f"读取 {len(chunks_data)} 个分块")
             
-            # 2. 生成向量
-            self.logger.info(f"开始向量化 {len(chunks_data)} 个文档块")
-            texts = [chunk["text"] for chunk in chunks_data]
-            embedding_results = self.embedder.embed_batch(texts)
+            # 2. 转换为 LangChain Document
+            documents = []
+            for chunk in chunks_data:
+                doc = Document(
+                    page_content=chunk["text"],
+                    metadata={
+                        "chunk_id": chunk["chunk_id"],
+                        "doc_id": chunk["doc_id"],
+                        **chunk.get("meta", {})
+                    }
+                )
+                documents.append(doc)
             
-            # 3. 准备Qdrant数据
-            documents_for_qdrant = []
-            for chunk_data, embedding in zip(chunks_data, embedding_results):
-                doc = dict(chunk_data)
-                doc["vector"] = embedding.vector.tolist()
-                doc["embedding_model"] = embedding.model_name
-                doc["vector_dimension"] = embedding.dimension
-                documents_for_qdrant.append(doc)
-            
-            # 4. 创建/更新Qdrant集合
-            vector_dim = embedding_results[0].dimension if embedding_results else 384
-            collection_created = self.qdrant_store.create_collection(
-                vector_size=vector_dim,
-                distance=self.config.qdrant_distance,
+            # 3. 创建/更新 Qdrant 集合
+            collection_created = self.vector_store.create_collection(
                 force_recreate=force_recreate
             )
             
             if not collection_created:
-                raise RuntimeError("Qdrant集合创建失败")
+                raise RuntimeError("Qdrant 集合创建失败")
             
-            # 5. 批量插入向量
-            upsert_success = self.qdrant_store.upsert_vectors(documents_for_qdrant)
+            self.logger.info(f"✅ Qdrant 集合: {self.config.qdrant_collection}")
             
-            if not upsert_success:
-                raise RuntimeError("向量数据插入失败")
+            # 4. 批量添加文档（LangChain 会自动调用 embeddings）
+            self.logger.info("开始向量化和索引...")
             
-            # 6. 统计信息
-            collection_info = self.qdrant_store.get_collection_info()
+            doc_ids = [chunk["chunk_id"] for chunk in chunks_data]
+            added_ids = self.vector_store.add_documents(
+                documents=documents,
+                ids=doc_ids,
+                batch_size=32
+            )
             
-            index_stats = {
-                "indexed_chunks": len(chunks_data),
-                "vector_dimension": vector_dim,
+            # 5. 获取集合信息
+            collection_info = self.vector_store.get_collection_info()
+            
+            stats = {
+                "indexed_chunks": len(added_ids),
+                "collection_name": self.config.qdrant_collection,
                 "collection_info": collection_info,
                 "embedding_model": self.config.embed_model,
                 "force_recreate": force_recreate,
             }
             
-            self.logger.info(f"文档索引完成: {len(chunks_data)} 个文档块")
-            return index_stats
+            self.logger.info(
+                f"✅ 文档索引完成: {stats['indexed_chunks']} 个分块, "
+                f"总点数={collection_info.get('points_count', 'unknown')}"
+            )
+            return stats
             
         except Exception as e:
-            self.logger.error(f"文档索引失败: {e}")
+            self.logger.error(f"❌ 文档索引失败: {e}")
             raise
     
-    def retrieve(self, query: str, top_k: int = None, include_kg: bool = True, 
-                scope: str = None) -> RAGRetrievalResult:
+    def retrieve(
+        self,
+        query: str,
+        top_k: Optional[int] = None,
+        filters: Optional[Dict[str, Any]] = None
+    ) -> RAGRetrievalResult:
         """
-        双通道检索
+        检索相关文档（使用 LangChain Retriever）
         
         Args:
             query: 查询文本
-            top_k: 最终返回结果数量
-            include_kg: 是否包含KG检索
-            scope: 检索范围（如book_id）
+            top_k: 返回结果数量（None = 使用配置默认值）
+            filters: 元数据过滤条件
             
         Returns:
             RAGRetrievalResult: 检索结果
         """
         try:
             top_k = top_k or self.config.final_top_k
-            self.logger.debug(f"开始双通道检索: query='{query[:50]}...', top_k={top_k}")
             
-            # 1. 向量检索
-            vector_results = self.vector_retriever.search(
-                query=query,
-                top_k=self.config.vector_top_k
-            )
+            self.logger.debug(f"开始检索: query='{query[:50]}...', top_k={top_k}")
             
-            # 2. KG检索（如果启用）
-            kg_results = []
-            if include_kg:
-                kg_results = self.kg_retriever.search(
-                    query=query,
-                    top_k=self.config.kg_top_k,
-                    hop=self.config.kg_hop,
-                    rel_types=self.config.kg_rel_types,
-                    scope=scope
-                )
+            # 使用 LangChain Retriever 检索
+            documents = self.hybrid_retriever.get_relevant_documents(query)
             
-            # 3. 合并证据
-            merged_evidence = self.evidence_merger.merge(
-                vector_results=vector_results,
-                kg_results=kg_results,
-                max_results=top_k * 2  # 为重排预留更多候选
-            )
+            # 限制结果数量
+            documents = documents[:top_k]
             
-            # 4. 重排（如果启用）
-            if self.config.use_reranker and merged_evidence:
-                reranked_results = self.reranker.rerank(
-                    query=query,
-                    evidence_list=merged_evidence,
-                    top_k=top_k
-                )
-                final_evidence = [r.evidence for r in reranked_results]
-            else:
-                final_evidence = merged_evidence[:top_k]
-            
-            # 5. 构建结果
+            # 构建结果
             result = RAGRetrievalResult(
                 query=query,
-                vector_hits=self._format_vector_hits(vector_results),
-                kg_hits=self._format_kg_hits(kg_results),
-                merged_evidence=final_evidence,
+                documents=documents,
                 metadata={
-                    "vector_count": len(vector_results),
-                    "kg_count": len(kg_results),
-                    "merged_count": len(merged_evidence),
-                    "final_count": len(final_evidence),
-                    "reranker_used": self.config.use_reranker,
+                    "retrieved_count": len(documents),
+                    "top_k": top_k,
                     "config": {
-                        "vector_top_k": self.config.vector_top_k,
-                        "kg_top_k": self.config.kg_top_k,
-                        "alpha": self.config.alpha,
-                        "beta": self.config.beta,
+                        "vector_weight": self.config.vector_weight,
+                        "kg_weight": self.config.kg_weight,
+                        "enable_kg": self.config.enable_kg,
                     }
                 }
             )
             
-            self.logger.info(f"双通道检索完成: vector={len(vector_results)}, kg={len(kg_results)}, final={len(final_evidence)}")
+            self.logger.info(f"✅ 检索完成: {len(documents)} 个文档")
             return result
             
         except Exception as e:
-            self.logger.error(f"双通道检索失败: {e}")
+            self.logger.error(f"❌ 检索失败: {e}")
             raise
     
-    def build_enhanced_prompt(self, base_prompt: str, query: str, 
-                            top_k: int = None, include_kg: bool = True) -> PromptContext:
+    def retrieve_as_dict(
+        self,
+        query: str,
+        top_k: Optional[int] = None
+    ) -> Dict[str, Any]:
         """
-        构建增强的提示
+        检索并返回字典格式（兼容现有接口）
         
         Args:
-            base_prompt: 基础提示
-            query: 查询（用于检索相关证据）
-            top_k: 检索结果数量
-            include_kg: 是否包含KG检索
+            query: 查询文本
+            top_k: 返回结果数量
             
         Returns:
-            PromptContext: 增强的提示上下文
+            Dict[str, Any]: 检索结果字典
         """
         try:
-            # 1. 检索相关证据
-            retrieval_result = self.retrieve(
-                query=query,
-                top_k=top_k,
-                include_kg=include_kg
-            )
+            result = self.retrieve(query, top_k)
             
-            # 2. 构建增强提示
-            enhanced_prompt = self.prompt_builder.build_enhanced_prompt(
-                base_prompt=base_prompt,
-                evidence=retrieval_result.merged_evidence,
-                include_citations=True
-            )
-            
-            # 3. 添加检索元数据
-            enhanced_prompt.context_length = len(enhanced_prompt.enhanced_prompt)
-            
-            return enhanced_prompt
-            
-        except Exception as e:
-            self.logger.error(f"构建增强提示失败: {e}")
-            raise
-    
-    def test_vector_retrieval(self, query: str, top_k: int = 5) -> Dict[str, Any]:
-        """
-        测试向量检索
-        
-        Args:
-            query: 测试查询
-            top_k: 结果数量
-            
-        Returns:
-            Dict[str, Any]: 测试结果（符合前端期望的格式）
-        """
-        try:
-            results = self.vector_retriever.search(query=query, top_k=top_k)
-            
-            # 返回前端期望的格式
             return {
-                "query": query,
-                "vector_hits": [
-                    {
-                        "score": r.score,
-                        "doc": r.doc_id,
-                        "chunk": r.text[:200] + "..." if len(r.text) > 200 else r.text,
-                        "chunk_id": r.chunk_id,
-                        "meta": r.meta,
-                    }
-                    for r in results
-                ],
-                "statistics": self.vector_retriever.get_statistics(),
+                "query": result.query,
+                "documents": documents_to_dict(result.documents),
+                "count": len(result.documents),
+                "metadata": result.metadata
             }
             
         except Exception as e:
-            self.logger.error(f"向量检索测试失败: {e}")
-            return {"error": str(e)}
-    
-    def test_kg_retrieval(self, query: str, hop: int = 2, top_k: int = 5) -> Dict[str, Any]:
-        """
-        测试KG检索
-        
-        Args:
-            query: 测试查询
-            hop: 跳数
-            top_k: 结果数量
-            
-        Returns:
-            Dict[str, Any]: 测试结果（符合前端期望的格式）
-        """
-        try:
-            results = self.kg_retriever.search(
-                query=query,
-                top_k=top_k,
-                hop=hop,
-                rel_types=self.config.kg_rel_types
-            )
-            
-            # 返回前端期望的格式
+            self.logger.error(f"❌ 检索失败: {e}")
             return {
                 "query": query,
-                "hop": hop,
-                "kg_hits": [
-                    {
-                        "score": r.score,
-                        "path": r.content,  # 前端显示为path
-                        "type": r.type,
-                        "explanation": r.explanation,
-                        "data": r.data,
-                    }
-                    for r in results
-                ],
-                "statistics": self.kg_retriever.get_statistics(),
+                "documents": [],
+                "count": 0,
+                "metadata": {"error": str(e)}
+            }
+    
+    def get_pipeline_status(self) -> Dict[str, Any]:
+        """
+        获取管线状态
+        
+        Returns:
+            Dict[str, Any]: 状态信息
+        """
+        try:
+            # 获取 Qdrant 集合信息
+            collection_info = self.vector_store.get_collection_info()
+            
+            # KG 健康检查
+            kg_health = False
+            if self.kg_retriever:
+                try:
+                    kg_health = self.neo4j_queries.health_check()
+                except:
+                    pass
+            
+            return {
+                "pipeline_type": "LangChain",
+                "config": {
+                    "embed_model": self.config.embed_model,
+                    "qdrant_collection": self.config.qdrant_collection,
+                    "vector_top_k": self.config.vector_top_k,
+                    "kg_top_k": self.config.kg_top_k,
+                    "enable_kg": self.config.enable_kg,
+                },
+                "components": {
+                    "embeddings": "SiliconFlowEmbeddings",
+                    "vector_store": "LangChainQdrantStore",
+                    "retriever": "HybridRetriever",
+                    "qdrant_health": collection_info.get("points_count") is not None,
+                    "kg_health": kg_health,
+                },
+                "collection_info": collection_info,
             }
             
         except Exception as e:
-            self.logger.error(f"KG检索测试失败: {e}")
-            return {"error": str(e)}
-    
-    def test_dual_retrieval(self, query: str, top_k: int = 4) -> Dict[str, Any]:
-        """
-        测试双通道检索
-        
-        Args:
-            query: 测试查询
-            top_k: 最终结果数量
-            
-        Returns:
-            Dict[str, Any]: 测试结果
-        """
-        try:
-            # 执行完整检索
-            result = self.retrieve(query=query, top_k=top_k)
-            
-            # 构建预览提示
-            if result.merged_evidence:
-                prompt_preview = self.prompt_builder.build_simple_context(
-                    evidence=result.merged_evidence,
-                    max_length=500
-                )
-            else:
-                prompt_preview = ""
-            
-            return {
-                "query": query,
-                "vector_hits": result.vector_hits,
-                "kg_hits": result.kg_hits,
-                "merged": [
-                    {
-                        "id": e.id,
-                        "type": e.type,
-                        "score": e.score,
-                        "content_preview": e.content[:200] + "..." if len(e.content) > 200 else e.content,
-                        "sources": e.sources,
-                    }
-                    for e in result.merged_evidence
-                ],
-                "prompt_preview": prompt_preview,
-                "metadata": result.metadata,
-            }
-            
-        except Exception as e:
-            self.logger.error(f"双通道检索测试失败: {e}")
+            self.logger.error(f"获取管线状态失败: {e}")
             return {"error": str(e)}
     
     def _load_chunks_from_jsonl(self, file_path: Path) -> List[Dict[str, Any]]:
-        """从JSONL文件加载分块数据"""
+        """从 JSONL 文件加载分块数据"""
         import json
         
         chunks = []
@@ -543,205 +462,38 @@ class RAGPipeline:
                     chunks.append(chunk_data)
         
         return chunks
+
+
+# ============================================================================
+# 工厂函数 - 向后兼容
+# ============================================================================
+
+def create_rag_pipeline(
+    embed_model: str = "BAAI/bge-m3",
+    qdrant_url: str = "http://qdrant:6333",
+    qdrant_collection: str = "kb_chunks",
+    enable_kg: bool = True,
+    **kwargs
+) -> RAGPipeline:
+    """
+    创建 RAG 管线（工厂函数）
     
-    def _format_vector_hits(self, vector_results) -> List[Dict[str, Any]]:
-        """格式化向量检索结果"""
-        return [
-            {
-                "chunk_id": r.chunk_id,
-                "doc_id": r.doc_id,
-                "score": r.score,
-                "content": r.text,
-                "meta": r.meta,
-            }
-            for r in vector_results
-        ]
-    
-    def _format_kg_hits(self, kg_results) -> List[Dict[str, Any]]:
-        """格式化KG检索结果"""
-        return [
-            {
-                "type": r.type,
-                "score": r.score,
-                "content": r.content,
-                "explanation": r.explanation,
-                "data": r.data,
-            }
-            for r in kg_results
-        ]
-    
-    def get_pipeline_status(self) -> Dict[str, Any]:
-        """
-        获取管线状态
+    Args:
+        embed_model: 嵌入模型名称
+        qdrant_url: Qdrant 服务 URL
+        qdrant_collection: Qdrant 集合名称
+        enable_kg: 是否启用 KG 检索
+        **kwargs: 额外配置参数
         
-        Returns:
-            Dict[str, Any]: 管线状态信息
-        """
-        try:
-            return {
-                "config": {
-                    "embed_model": self.config.embed_model,
-                    "qdrant_collection": self.config.qdrant_collection,
-                    "vector_top_k": self.config.vector_top_k,
-                    "kg_top_k": self.config.kg_top_k,
-                    "use_reranker": self.config.use_reranker,
-                },
-                "components": {
-                    "qdrant_health": self.qdrant_store.health_check(),
-                    "neo4j_health": self.neo4j_queries.health_check(),
-                    "embedder_loaded": self.embedder.is_loaded,
-                    "reranker_enabled": self.reranker.enabled,
-                },
-                "statistics": {
-                    "vector_stats": self.vector_retriever.get_statistics(),
-                    "kg_stats": self.kg_retriever.get_statistics(),
-                },
-            }
-            
-        except Exception as e:
-            self.logger.error(f"获取管线状态失败: {e}")
-            return {"error": str(e)}
+    Returns:
+        RAGPipeline: RAG 管线实例
+    """
+    config = RAGConfig(
+        embed_model=embed_model,
+        qdrant_url=qdrant_url,
+        qdrant_collection=qdrant_collection,
+        enable_kg=enable_kg,
+        **kwargs
+    )
     
-    def ingest_documents_with_kg_linking(self, file_paths: List[str], doc_metadata: Dict[str, Any] = None) -> Dict[str, Any]:
-        """
-        文档入库并建立KG联动
-        
-        Args:
-            file_paths: 文档路径列表
-            doc_metadata: 文档元数据
-            
-        Returns:
-            Dict[str, Any]: 处理结果
-        """
-        try:
-            import hashlib
-            import os
-            from pathlib import Path
-            from datetime import datetime
-            
-            processed_files = 0
-            created_chunks = 0
-            created_mentions = 0
-            
-            for file_path in file_paths:
-                try:
-                    file_path_obj = Path(file_path)
-                    
-                    if not file_path_obj.exists():
-                        self.logger.warning(f"文件不存在: {file_path}")
-                        continue
-                    
-                    # 1. 读取文件内容
-                    with open(file_path, 'r', encoding='utf-8') as f:
-                        content = f.read()
-                    
-                    # 2. 计算文件信息
-                    file_size = os.path.getsize(file_path)
-                    content_hash = hashlib.md5(content.encode()).hexdigest()
-                    
-                    # 3. 创建文档节点
-                    doc_id = f"doc:{content_hash[:12]}"
-                    doc_data = {
-                        "id": doc_id,
-                        "filename": file_path_obj.name,
-                        "filepath": str(file_path),
-                        "content_type": "text/plain",
-                        "size": file_size,
-                        "checksum": content_hash,
-                        "metadata": doc_metadata or {},
-                        "indexed_at": datetime.now().isoformat()
-                    }
-                    
-                    self.document_store.create_document_node(doc_data)
-                    
-                    # 4. 文档分块
-                    chunks = self.chunker.chunk_text(content, metadata={"doc_id": doc_id})
-                    
-                    for i, chunk in enumerate(chunks):
-                        # 5. 创建块节点
-                        chunk_id = f"chunk:{doc_id}:{i:04d}"
-                        chunk_hash = hashlib.md5(chunk.content.encode()).hexdigest()
-                        
-                        chunk_data = {
-                            "id": chunk_id,
-                            "doc_id": doc_id,
-                            "chunk_index": i,
-                            "content": chunk.content,
-                            "content_hash": chunk_hash,
-                            "start_char": chunk.start_char,
-                            "end_char": chunk.end_char,
-                            "vector_id": None,  # 稍后设置
-                            "metadata": chunk.metadata,
-                            "created_at": datetime.now().isoformat()
-                        }
-                        
-                        self.document_store.create_chunk_node(chunk_data)
-                        self.document_store.create_doc_chunk_relationship(doc_id, chunk_id)
-                        created_chunks += 1
-                        
-                        # 6. 实体提取和MENTIONS关系创建
-                        try:
-                            entities, kg_entity_ids = self.entity_extractor.extract_entities_with_kg_context(
-                                chunk.content, 
-                                self.neo4j_queries._client
-                            )
-                            
-                            if kg_entity_ids:
-                                mention_count = self.document_store.create_chunk_entity_mentions(
-                                    chunk_id, 
-                                    kg_entity_ids,
-                                    [e.confidence for e in entities if e.kg_entity_id]
-                                )
-                                created_mentions += mention_count
-                                
-                        except Exception as e:
-                            self.logger.warning(f"块实体提取失败 {chunk_id}: {e}")
-                    
-                    processed_files += 1
-                    self.logger.info(f"文档处理完成: {file_path} ({len(chunks)} 块)")
-                    
-                except Exception as e:
-                    self.logger.error(f"处理文件失败 {file_path}: {e}")
-                    continue
-            
-            result = {
-                "processed_files": processed_files,
-                "created_chunks": created_chunks,
-                "created_mentions": created_mentions,
-                "kg_linking_enabled": True
-            }
-            
-            self.logger.info(f"KG联动文档入库完成: {result}")
-            return result
-            
-        except Exception as e:
-            self.logger.error(f"KG联动文档入库失败: {e}")
-            return {"error": str(e)}
-    
-    def get_chunk_kg_context(self, chunk_id: str) -> Dict[str, Any]:
-        """
-        获取块的KG上下文
-        
-        Args:
-            chunk_id: 块ID
-            
-        Returns:
-            Dict[str, Any]: KG上下文信息
-        """
-        try:
-            # 获取块提及的实体
-            mentioned_entities = self.document_store.find_entities_by_chunk(chunk_id)
-            
-            # 获取块的上下文图谱
-            context_graph = self.document_store.get_chunk_context_graph(chunk_id)
-            
-            return {
-                "chunk_id": chunk_id,
-                "mentioned_entities": mentioned_entities,
-                "context_graph": context_graph,
-                "entity_count": len(mentioned_entities)
-            }
-            
-        except Exception as e:
-            self.logger.error(f"获取块KG上下文失败: {e}")
-            return {"error": str(e)}
+    return RAGPipeline(config)
